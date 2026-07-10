@@ -14,12 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target:
-          - FuzzServerChecksum
-          - FuzzBuild
-          - FuzzParseSID
-          - FuzzParseHashInput
-          - FuzzEncryptRC4
+        include:
+          - target: FuzzServerChecksum
+            path: ./pac/
+          - target: FuzzBuild
+            path: ./pac/
+          - target: FuzzParseSID
+            path: ./pac/
+          - target: FuzzParseHashInput
+            path: ./parse/
+          - target: FuzzEncryptRC4
+            path: ./ticket/
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -31,4 +36,4 @@ jobs:
 
       - name: Run fuzz test
         run: |
-          go test -fuzz=${{ matrix.target }} -fuzztime=5m -run='^$' ./pac/ ./parse/ ./ticket/
+          go test -fuzz=${{ matrix.target }} -fuzztime=5m -run='^$' ${{ matrix.path }}
