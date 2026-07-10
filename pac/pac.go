@@ -136,7 +136,7 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	copy(userSID, sidBytes[len(sidBytes)-4:])
 	domainSID := make([]byte, len(sidBytes)-4) // first N-4 bytes = domain prefix
 	copy(domainSID, sidBytes[:len(sidBytes)-4])
-	domainSID[1] = 4 // change revision from 5 to 4
+	domainSID[1] = 4 // reduce sub-authority count (strip RID)
 
 	// ---- Build LOGON_INFORMATION inline body ----
 	var body bytes.Buffer

@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"runtime"
+	cryptorand "crypto/rand"
 	"strings"
 	"time"
 
@@ -314,7 +314,9 @@ func displayNameOrDefault(explicit, userName string) string {
 }
 
 func randomizedAuthTimeFT(now time.Time) uint64 {
-	jitter := 30 + rand.Intn(60)
+	b := make([]byte, 1)
+	cryptorand.Read(b)
+	jitter := 30 + int(b[0])%60
 	authTime := now.Add(-time.Duration(jitter) * time.Second)
 	return uint64(authTime.UnixNano()/100 + 116444736000000000)
 }
