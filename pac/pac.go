@@ -493,6 +493,9 @@ func parseSID(s string) ([]byte, error) {
 		return nil, err
 	}
 	revision := uint8(rev)
+	if revision < 1 || revision > 15 {
+		return nil, fmt.Errorf("pac: invalid SID revision: %d", revision)
+	}
 	pos = next
 
 	auth, next, err := parseSIDComponent(s, pos)
@@ -534,6 +537,9 @@ func parseSIDComponent(s string, start int) (uint64, int, error) {
 	end := start
 	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
 		end++
+	}
+	if end == start {
+		return 0, start, fmt.Errorf("pac: empty SID component at position %d", start)
 	}
 	const maxComponent = 0xFFFFFFFF
 	var v uint64
