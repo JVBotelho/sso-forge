@@ -1,6 +1,6 @@
 module github.com/skewwbox/sso-forge
 
-go 1.22
+go 1.23
 
 require github.com/jcmturner/gokrb5/v8 v8.4.4
 

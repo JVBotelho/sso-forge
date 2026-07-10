@@ -458,12 +458,6 @@ func signaturePlaceholder(sigType uint32, sigSize int) []byte {
 	return buf
 }
 
-func fillRandom(b []byte) {
-	for i := range b {
-		b[i] = byte(i * 13 % 256)
-	}
-}
-
 // parseSID converts "S-1-5-21-X-Y-Z-RID" to binary.
 func parseSID(s string) ([]byte, error) {
 	pos := 0

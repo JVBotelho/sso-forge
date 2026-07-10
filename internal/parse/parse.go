@@ -127,8 +127,6 @@ func parseKerbStoredCredential(data []byte, keys *Keys) {
 	extractKeyByType(data, kerbKeyTypeRC4, 16, &keys.RC4)
 	extractKeyByType(data, kerbKeyTypeAES128, 16, &keys.AES128)
 	extractKeyByType(data, kerbKeyTypeAES256, 32, &keys.AES256)
-
-	_ = offset
 }
 
 // extractKeyByType searches a blob for a key of the given type and extracts it.

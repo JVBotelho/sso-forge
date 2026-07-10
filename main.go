@@ -84,7 +84,11 @@ func main() {
 		case "token":
 			fmt.Println(token.AccessToken)
 		case "json":
-			out, _ := json.MarshalIndent(token, "", "  ")
+			out, err := json.MarshalIndent(token, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: json: %v\n", err)
+			os.Exit(1)
+		}
 			fmt.Println(string(out))
 		}
 		return
@@ -109,6 +113,12 @@ func main() {
 		eType = etypeID.AES256_CTS_HMAC_SHA1_96
 		if *verbose {
 			fmt.Fprintf(os.Stderr, "[+] AES256 key: %s\n", hex.EncodeToString(key))
+		}
+	} else if keys.AES128 != nil {
+		key = keys.AES128
+		eType = etypeID.AES128_CTS_HMAC_SHA1_96
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "[+] AES128 key: %s\n", hex.EncodeToString(key))
 		}
 	} else {
 		fmt.Fprint(os.Stderr, "error: no valid key found (RC4 or AES256 required)\n")
@@ -174,9 +184,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "[+] PAC: %d bytes\n", len(pacBytes))
 		}
 	}
-	_ = userRID
-	_ = netBIOS
-
 	// 5. Forge ticket
 	forgeParams := &kbticket.ForgeParams{
 		Key:           key,
@@ -222,7 +229,7 @@ func main() {
 
 	if *dryRun {
 		if *output == "json" {
-			out, _ := json.MarshalIndent(map[string]any{
+			out, err := json.MarshalIndent(map[string]any{
 				"status":   "dry-run",
 				"spnego64": spnegoB64,
 				"domain":   *domain,
@@ -231,6 +238,10 @@ func main() {
 				"upn":      *upn,
 				"sid":      *sid,
 			}, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: json: %v\n", err)
+				os.Exit(1)
+			}
 			fmt.Println(string(out))
 		} else {
 			fmt.Println(spnegoB64)
@@ -256,7 +267,11 @@ func main() {
 	case "token":
 		fmt.Println(token.AccessToken)
 	case "json":
-		out, _ := json.MarshalIndent(token, "", "  ")
+		out, err := json.MarshalIndent(token, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: json: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println(string(out))
 	case "saml":
 		decoded, _ := base64.StdEncoding.DecodeString(token.SAMLAssertion)

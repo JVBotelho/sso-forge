@@ -31,5 +31,4 @@ jobs:
 
       - name: Run fuzz test
         run: |
-          go test -fuzz=${{ matrix.target }} -fuzztime=5m \
-            -run='^$' ./...
+          go test -fuzz=${{ matrix.target }} -fuzztime=5m -run='^$' ./internal/pac/ ./internal/parse/ ./internal/ticket/
