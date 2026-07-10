@@ -1,0 +1,59 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901abe5b8200e2588b02e1923d7c00a5e3 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@f111f3307d8850f799b82f0e7b6506e09454a7d2 # v5.3.0
+        with:
+          go-version: '1.24'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e432e # v3.8.1
+
+      - name: Build release binaries
+        run: make release
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@f5e124a5e5e1d497a692818ae907d3a4580d0339 # v0.18.0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: dist/sbom.spdx.json
+
+      - name: Sign artifacts with cosign
+        run: |
+          for f in dist/sso-forge-*; do
+            cosign sign-blob --yes --output-signature "dist/$(basename $f).sig" --output-certificate "dist/$(basename $f).pem" "$f"
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum sso-forge-* > checksums.txt
+          cosign sign-blob --yes --output-signature checksums.txt.sig --output-certificate checksums.txt.pem checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef95414bc17e # v2.2.0
+        with:
+          files: |
+            dist/sso-forge-*
+            dist/sbom.spdx.json
+            dist/checksums.txt
+            dist/*.sig
+            dist/*.pem
+          generate_release_notes: true

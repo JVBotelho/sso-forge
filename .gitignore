@@ -1,3 +1,4 @@
 sso-forge
 test-exchange
+dist/
 cmd/test-exchange/main.go

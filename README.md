@@ -1,5 +1,9 @@
 # sso-forge
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/skewwbox/sso-forge/badge)](https://securityscorecards.dev/viewer/?uri=github.com/skewwbox/sso-forge)
+[![Go](https://img.shields.io/github/go-mod/go-version/skewwbox/sso-forge)](https://go.dev/)
+[![Release](https://img.shields.io/github/v/release/skewwbox/sso-forge)](https://github.com/skewwbox/sso-forge/releases)
+
 Forge Entra ID Seamless SSO access tokens from the AZUREADSSOACC Kerberos key.
 Cross-platform (Linux/macOS/Windows) Go port of AADInternals.
 
@@ -73,6 +77,25 @@ secretsdump.py DOMAIN/Administrator@DC -just-dc-user 'AZUREADSSOACC$'
 
 ```bash
 go build -o sso-forge .
+make build     # stripped binary
+make release   # cross-platform + checksums
+```
+
+## Security
+
+- [OpenSSF Scorecard](https://securityscorecards.dev/viewer/?uri=github.com/skewwbox/sso-forge)
+- Signed releases with [cosign](https://github.com/sigstore/cosign)
+- SBOMs generated for every release
+- Dependencies pinned via go.sum
+- [Security policy](SECURITY.md)
+
+Verify a release:
+```bash
+cosign verify-blob sso-forge-linux-amd64 \
+  --signature sso-forge-linux-amd64.sig \
+  --certificate sso-forge-linux-amd64.pem \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/skewwbox/sso-forge/.github/workflows/release.yml@refs/tags/<TAG>"
 ```
 
 ## Requirements

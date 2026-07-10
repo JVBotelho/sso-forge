@@ -1,0 +1,27 @@
+name: Build and Test
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ['1.23', '1.24']
+    steps:
+      - uses: actions/checkout@11bd71901abe5b8200e2588b02e1923d7c00a5e3 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@f111f3307d8850f799b82f0e7b6506e09454a7d2 # v5.3.0
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -ldflags="-s -w" -o sso-forge .
