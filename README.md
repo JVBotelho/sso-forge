@@ -109,12 +109,27 @@ cosign verify-blob sso-forge-linux-amd64 \
 ```
 sso-forge/
 ├── main.go                   # CLI entry point
-├── internal/
-│   ├── pac/                  # PAC construction (KERB_VALIDATION_INFO, checksums)
-│   ├── ticket/               # EncTicketPart + Authenticator DER assembly, encryption
-│   ├── exchange/             # WS-Trust → SAML → OAuth2 pipeline
-│   ├── parse/                # supplementalCredentials blob + hash input parsing
-│   └── discovery/            # Tenant ID auto-discovery via OpenID config
+├── pac/                      # PAC construction (KERB_VALIDATION_INFO, checksums)
+├── ticket/                   # EncTicketPart + Authenticator DER assembly, encryption
+├── exchange/                 # WS-Trust → SAML → OAuth2 pipeline
+├── parse/                    # supplementalCredentials blob + hash input parsing
+├── discovery/                # Tenant ID auto-discovery via OpenID config
+├── docs/                     # Documentation
+│   └── dev/                  # Development notes (gitignored)
+├── go.mod
+├── Makefile
+└── README.md
+```
+
+All packages are public and importable:
+```go
+import (
+    "github.com/skewwbox/sso-forge/pac"
+    "github.com/skewwbox/sso-forge/ticket"
+    "github.com/skewwbox/sso-forge/exchange"
+    "github.com/skewwbox/sso-forge/parse"
+    "github.com/skewwbox/sso-forge/discovery"
+)
 ```
 
 ## References

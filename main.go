@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skewwbox/sso-forge/internal/discovery"
-	"github.com/skewwbox/sso-forge/internal/exchange"
-	"github.com/skewwbox/sso-forge/internal/pac"
-	"github.com/skewwbox/sso-forge/internal/parse"
-	kbticket "github.com/skewwbox/sso-forge/internal/ticket"
+	"github.com/skewwbox/sso-forge/discovery"
+	"github.com/skewwbox/sso-forge/exchange"
+	"github.com/skewwbox/sso-forge/pac"
+	"github.com/skewwbox/sso-forge/parse"
+	kbticket "github.com/skewwbox/sso-forge/ticket"
 
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 )
