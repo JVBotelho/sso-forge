@@ -20,15 +20,18 @@ import (
 	"strings"
 )
 
-// TokenResult contains the OAuth2 token response.
+// TokenResult contains the OAuth2 token response and intermediate artifacts.
 type TokenResult struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    string `json:"expires_in"`
-	ExpiresOn    string `json:"expires_on"`
-	Resource     string `json:"resource"`
-	TokenType    string `json:"token_type"`
-	Scope        string `json:"scope"`
+	AccessToken     string `json:"access_token"`
+	RefreshToken    string `json:"refresh_token"`
+	ExpiresIn       string `json:"expires_in"`
+	ExpiresOn       string `json:"expires_on"`
+	Resource        string `json:"resource"`
+	TokenType       string `json:"token_type"`
+	Scope           string `json:"scope"`
+	DesktopSsoToken string `json:"desktop_sso_token,omitempty"`
+	SAMLAssertion   string `json:"saml_assertion,omitempty"`
+	TenantID        string `json:"tenant_id,omitempty"`
 }
 
 // ExchangeParams holds the parameters for the cloud token exchange.
@@ -125,6 +128,10 @@ func GetAccessToken(params *ExchangeParams) (*TokenResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oauth2: %w", err)
 	}
+
+	token.DesktopSsoToken = ssoToken
+	token.SAMLAssertion = samlAssertion
+	token.TenantID = params.TenantID
 
 	return token, nil
 }

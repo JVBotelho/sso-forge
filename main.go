@@ -258,6 +258,11 @@ func main() {
 	case "json":
 		out, _ := json.MarshalIndent(token, "", "  ")
 		fmt.Println(string(out))
+	case "saml":
+		decoded, _ := base64.StdEncoding.DecodeString(token.SAMLAssertion)
+		fmt.Println(string(decoded))
+	case "ssotoken":
+		fmt.Println(token.DesktopSsoToken)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown output: %s\n", *output)
 		os.Exit(1)
