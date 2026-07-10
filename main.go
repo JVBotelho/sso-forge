@@ -106,19 +106,19 @@ func main() {
 		key = keys.RC4
 		eType = etypeID.RC4_HMAC
 		if *verbose {
-			fmt.Fprintf(os.Stderr, "[+] RC4 key: %s\n", hex.EncodeToString(key))
+			fmt.Fprintf(os.Stderr, "[+] RC4 key: %s...\n", hex.EncodeToString(key[:4]))
 		}
 	} else if keys.AES256 != nil {
 		key = keys.AES256
 		eType = etypeID.AES256_CTS_HMAC_SHA1_96
 		if *verbose {
-			fmt.Fprintf(os.Stderr, "[+] AES256 key: %s\n", hex.EncodeToString(key))
+			fmt.Fprintf(os.Stderr, "[+] AES256 key: %s...\n", hex.EncodeToString(key[:4]))
 		}
 	} else if keys.AES128 != nil {
 		key = keys.AES128
 		eType = etypeID.AES128_CTS_HMAC_SHA1_96
 		if *verbose {
-			fmt.Fprintf(os.Stderr, "[+] AES128 key: %s\n", hex.EncodeToString(key))
+			fmt.Fprintf(os.Stderr, "[+] AES128 key: %s...\n", hex.EncodeToString(key[:4]))
 		}
 	} else {
 		fmt.Fprint(os.Stderr, "error: no valid key found (RC4 or AES256 required)\n")
@@ -274,7 +274,11 @@ func main() {
 		}
 		fmt.Println(string(out))
 	case "saml":
-		decoded, _ := base64.StdEncoding.DecodeString(token.SAMLAssertion)
+		decoded, err := base64.StdEncoding.DecodeString(token.SAMLAssertion)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: SAML decode: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println(string(decoded))
 	case "ssotoken":
 		fmt.Println(token.DesktopSsoToken)

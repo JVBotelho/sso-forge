@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // TokenResult contains the OAuth2 token response and intermediate artifacts.
@@ -52,6 +53,17 @@ type ExchangeParams struct {
 // used for SAML bearer grant exchanges.
 const DefaultClientID = "1b730954-1685-4b74-9bfd-dac224a7b894"
 
+var httpClient = &http.Client{
+    Timeout: 30 * time.Second,
+    CheckRedirect: func(req *http.Request, via []*http.Request) error {
+        if len(via) >= 3 { return fmt.Errorf("too many redirects") }
+        host := req.URL.Hostname()
+        if strings.HasSuffix(host, ".microsoftonline.com") || strings.HasSuffix(host, ".microsoftazuread-sso.com") || strings.HasSuffix(host, ".windows.net") {
+            return nil
+        }
+        return fmt.Errorf("redirect to untrusted host: %s", req.URL.Host)
+    },
+}
 // WS-Trust endpoint template
 const wsTrustURL = "https://autologon.microsoftazuread-sso.com/%s/winauth/trust/2005/windowstransport?client-request-id=%s"
 
@@ -150,7 +162,7 @@ func requestDesktopSsoToken(params *ExchangeParams) (string, error) {
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 	req.Header.Set("SOAPAction", "http://schemas.xmlsoap.org/ws/2005/02/trust/RST/Issue")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http: %w", err)
 	}
@@ -162,7 +174,7 @@ func requestDesktopSsoToken(params *ExchangeParams) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ws-trust returned %d: %s", resp.StatusCode, string(respBody))
+		if len(respBody) > 500 { respBody = respBody[:500] }; return "", fmt.Errorf("ws-trust returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return extractDesktopSsoToken(respBody)
@@ -225,7 +237,8 @@ func extractDesktopSsoToken(xmlData []byte) (string, error) {
 // buildSAMLAssertion wraps the DesktopSsoToken in a SAML 1.1 assertion and base64-encodes it.
 // Matches AADInternals minimal format.
 func buildSAMLAssertion(ssoToken string) (string, error) {
-	saml := `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:1.0:assertion"><DesktopSsoToken>` + ssoToken + `</DesktopSsoToken></saml:Assertion>`
+	escaped := xmlEscape(ssoToken)
+	saml := `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:1.0:assertion"><DesktopSsoToken>` + escaped + `</DesktopSsoToken></saml:Assertion>`
 	return base64.StdEncoding.EncodeToString([]byte(saml)), nil
 }
 
@@ -250,7 +263,7 @@ func exchangeSAMLForToken(tenantID, resource, clientID, assertion string) (*Toke
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}
@@ -278,7 +291,7 @@ func exchangeSAMLForToken(tenantID, resource, clientID, assertion string) (*Toke
 // discoverTenantID discovers the tenant ID from the domain using OpenID Connect discovery.
 func discoverTenantID(domain string) (string, error) {
 	url := fmt.Sprintf("https://login.microsoftonline.com/%s/.well-known/openid-configuration", domain)
-	resp, err := http.DefaultClient.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("discovery: %w", err)
 	}
@@ -309,6 +322,21 @@ func discoverTenantID(domain string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not extract tenant ID from authorization_endpoint: %s", config.AuthEndpoint)
+}
+
+func xmlEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '&': b.WriteString("&amp;")
+		case '<': b.WriteString("&lt;")
+		case '>': b.WriteString("&gt;")
+		case '"': b.WriteString("&quot;")
+		case '\'': b.WriteString("&apos;")
+		default: b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func uuid() string {

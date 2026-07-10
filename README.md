@@ -76,7 +76,7 @@ secretsdump.py DOMAIN/Administrator@DC -just-dc-user 'AZUREADSSOACC$'
 ## Build
 
 ```bash
-go build -o sso-forge .
+go build -ldflags="-s -w" -o sso-forge .
 make build     # stripped binary
 make release   # cross-platform + checksums
 ```

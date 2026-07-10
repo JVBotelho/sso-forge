@@ -236,7 +236,7 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 					derTag(0xA1, derOctet(derSeq(
 						derSeq(
 							derTag(0xA0, derInt1(0)),
-							derTag(0xA1, derOctet(authTokenRestrictionData(machineID))),
+							derTag(0xA1, derOctet(tokenRestrictionData(machineID))),
 						),
 					))),
 				),
@@ -260,12 +260,7 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 	)
 }
 
-func authTokenRestrictionData(machineID []byte) []byte {
-	b := make([]byte, 40)
-	b[4] = 0x00; b[5] = 0x10 // IntegrityLevel = Low (0x1000)
-	copy(b[8:], machineID)
-	return b
-}
+
 
 // buildAPREQDER constructs the AP-REQ ticket envelope.
 func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
@@ -438,15 +433,23 @@ func derUnicodeStr(s string) []byte {
 }
 
 func derLen(n int) []byte {
-	switch {
-	case n < 128:
+	if n < 128 {
 		return []byte{byte(n)}
-	case n < 256:
-		return []byte{0x81, byte(n)}
-	default:
-		return []byte{0x82, byte(n >> 8), byte(n)}
 	}
+	if n < 256 {
+		return []byte{0x81, byte(n)}
+	}
+	// Encode big-endian with minimal bytes for long-form DER length
+	var buf []byte
+	for v := n; v > 0; v >>= 8 {
+		buf = append([]byte{byte(v & 0xFF)}, buf...)
+	}
+	if len(buf) > 126 { // DER allows up to 126 length octets
+		panic("derLen: value exceeds maximum DER long-form length")
+	}
+	return append([]byte{0x80 | byte(len(buf))}, buf...)
 }
+
 
 // ============================================================
 // Encryption (RC4-HMAC or AES-CTS-HMAC-SHA1-96)

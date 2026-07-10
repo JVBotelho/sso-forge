@@ -513,9 +513,15 @@ func parseSIDComponent(s string, start int) (uint64, int, error) {
 	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
 		end++
 	}
+	const maxComponent = 0xFFFFFFFF
 	var v uint64
 	for i := start; i < end; i++ {
-		v = v*10 + uint64(s[i]-'0')
+		digit := uint64(s[i] - '0')
+		if digit > 9 { continue }
+		if v > (maxComponent - digit) / 10 {
+			return 0, start, fmt.Errorf("pac: SID component overflow at %d", i)
+		}
+		v = v*10 + digit
 	}
 	next := end
 	if next < len(s) && s[next] == '-' {
