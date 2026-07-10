@@ -160,7 +160,7 @@ func buildTicketAuthDataDER(p *ForgeParams) []byte {
 
 func tokenRestrictionData(machineID []byte) []byte {
 	b := make([]byte, 40)
-	b[4] = 0x00; b[5] = 0x10 // IntegrityLevel = Low (0x1000)
+	b[4] = 0x00; b[5] = 0x20 // IntegrityLevel = Medium (0x2000)
 	copy(b[8:], machineID)   // MachineId (32 bytes) at offset 8-39
 	return b
 }

