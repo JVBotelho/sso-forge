@@ -1,9 +1,9 @@
 name: CodeQL
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   schedule:
     - cron: '0 12 * * 1'
   workflow_dispatch:
@@ -22,11 +22,11 @@ jobs:
       matrix:
         language: [go]
     steps:
-      - uses: actions/checkout@11bd71901abe5b8200e2588b02e1923d7c00a5e3 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@ddb66f71eddb8df0b4b1095d69f6e675181f2ad5 # v3.28.16
+      - uses: github/codeql-action/init@28deaeda66b76a05916b6923827895f2b14ab387 # v3.28.16
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@ddb66f71eddb8df0b4b1095d69f6e675181f2ad5 # v3.28.16
-      - uses: github/codeql-action/analyze@ddb66f71eddb8df0b4b1095d69f6e675181f2ad5 # v3.28.16
+      - uses: github/codeql-action/autobuild@28deaeda66b76a05916b6923827895f2b14ab387 # v3.28.16
+      - uses: github/codeql-action/analyze@28deaeda66b76a05916b6923827895f2b14ab387 # v3.28.16
