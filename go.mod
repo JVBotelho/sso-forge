@@ -1,4 +1,4 @@
-module github.com/skewwbox/sso-forge
+module github.com/JVBotelho/sso-forge
 
 go 1.23
 

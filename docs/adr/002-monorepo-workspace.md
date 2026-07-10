@@ -14,7 +14,7 @@ Go projects have two common layouts: flat (everything in root or `internal/`) vs
 
 ```
 sso-forge/
-├── go.mod                    # module github.com/skewwbox/sso-forge
+├── go.mod                    # module github.com/JVBotelho/sso-forge
 ├── go.sum
 ├── main.go                   # CLI entry point
 ├── internal/

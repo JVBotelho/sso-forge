@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skewwbox/sso-forge/discovery"
-	"github.com/skewwbox/sso-forge/exchange"
-	"github.com/skewwbox/sso-forge/pac"
-	"github.com/skewwbox/sso-forge/parse"
-	kbticket "github.com/skewwbox/sso-forge/ticket"
+	"github.com/JVBotelho/sso-forge/discovery"
+	"github.com/JVBotelho/sso-forge/exchange"
+	"github.com/JVBotelho/sso-forge/pac"
+	"github.com/JVBotelho/sso-forge/parse"
+	kbticket "github.com/JVBotelho/sso-forge/ticket"
 
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 )
