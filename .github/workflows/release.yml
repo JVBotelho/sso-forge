@@ -73,11 +73,15 @@ jobs:
     permissions:
       actions: read
       id-token: write
-      contents: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
     with:
       base64-subjects: "${{ needs.build.outputs.hashes }}"
-      upload-assets: true
+      # upload-assets left false: their upload-assets job reads
+      # needs.generator.outputs.provenance-name, which resolves empty
+      # across the job boundary (upstream bug in generator_generic_slsa3.yml
+      # v2.1.0). We know the artifact name because we set it explicitly
+      # below, so the release job downloads it directly instead.
+      upload-assets: false
       provenance-name: "sso-forge.intoto.jsonl"
 
   release:
@@ -92,6 +96,12 @@ jobs:
           name: dist
           path: dist
 
+      - name: Download provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sso-forge.intoto.jsonl
+          path: dist
+
       - name: Create Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
@@ -100,4 +110,5 @@ jobs:
             dist/sbom.spdx.json
             dist/checksums.txt
             dist/*.sigstore.json
+            dist/sso-forge.intoto.jsonl
           generate_release_notes: true
