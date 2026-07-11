@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+reason = "x/crypto/openpgp is not imported by this project or any of its direct dependencies (gokrb5/v8 does not use openpgp). The vulnerability exists in unused sub-packages of golang.org/x/crypto."
