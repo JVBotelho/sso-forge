@@ -41,14 +41,14 @@ jobs:
       - name: Sign artifacts with cosign
         run: |
           for f in dist/sso-forge-*; do
-            cosign sign-blob --yes --bundle "dist/$(basename $f).bundle" "$f"
+            cosign sign-blob --yes --bundle "dist/$(basename $f).sigstore.json" "$f"
           done
 
       - name: Generate checksums
         run: |
           cd dist
           sha256sum sso-forge-* > checksums.txt
-          cosign sign-blob --yes --bundle checksums.txt.bundle checksums.txt
+          cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
@@ -57,5 +57,5 @@ jobs:
             dist/sso-forge-*
             dist/sbom.spdx.json
             dist/checksums.txt
-            dist/*.bundle
+            dist/*.sigstore.json
           generate_release_notes: true

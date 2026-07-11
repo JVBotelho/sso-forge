@@ -98,7 +98,7 @@ make release   # cross-platform + checksums
 Verify a release:
 ```bash
 cosign verify-blob sso-forge-linux-amd64 \
-  --bundle sso-forge-linux-amd64.bundle \
+  --bundle sso-forge-linux-amd64.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "https://github.com/JVBotelho/sso-forge/.github/workflows/release.yml@refs/tags/<TAG>"
 ```
