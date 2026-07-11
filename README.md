@@ -7,6 +7,12 @@
 Forge Entra ID Seamless SSO access tokens from the AZUREADSSOACC Kerberos key.
 Cross-platform (Linux/macOS/Windows) Go port of AADInternals.
 
+> **For authorized security testing and research only.** This is a
+> post-exploitation tool: it requires a key already extracted via DCSync,
+> meaning the operator must have Domain Admin or equivalent privileges
+> before running it. Do not use against systems or accounts without
+> explicit, documented permission from their owner.
+
 ## How it works
 
 ```

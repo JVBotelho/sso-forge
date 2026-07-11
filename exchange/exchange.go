@@ -36,7 +36,13 @@ type TokenResult struct {
 }
 
 func jitter() { time.Sleep(time.Duration(200+randIntN(500)) * time.Millisecond) }
-func randIntN(n int) int { b := make([]byte, 4); cryptorand.Read(b); return int(binary.BigEndian.Uint32(b)) % n }
+func randIntN(n int) int {
+	b := make([]byte, 4)
+	if _, err := io.ReadFull(cryptorand.Reader, b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	return int(binary.BigEndian.Uint32(b)) % n
+}
 
 // ExchangeParams holds the parameters for the cloud token exchange.
 type ExchangeParams struct {
@@ -57,10 +63,12 @@ type ExchangeParams struct {
 const DefaultClientID = "1b730954-1685-4b74-9bfd-dac224a7b894"
 
 var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout:   30 * time.Second,
 	Transport: &http.Transport{DisableKeepAlives: true},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 { return fmt.Errorf("too many redirects") }
+		if len(via) >= 3 {
+			return fmt.Errorf("too many redirects")
+		}
 		host := req.URL.Hostname()
 		if strings.HasSuffix(host, ".microsoftonline.com") || strings.HasSuffix(host, ".microsoftazuread-sso.com") || strings.HasSuffix(host, ".windows.net") {
 			return nil
@@ -181,7 +189,10 @@ func requestDesktopSsoToken(params *ExchangeParams) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if len(respBody) > 500 { respBody = respBody[:500] }; return "", fmt.Errorf("ws-trust returned %d: %s", resp.StatusCode, string(respBody))
+		if len(respBody) > 500 {
+			respBody = respBody[:500]
+		}
+		return "", fmt.Errorf("ws-trust returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return extractDesktopSsoToken(respBody)
@@ -223,16 +234,18 @@ func extractDesktopSsoToken(xmlData []byte) (string, error) {
 	// Fallback: try with RequestSecurityTokenResponseCollection wrapper
 	type rstc struct {
 		RSTC struct {
-			RequestedSecurityToken struct {
-				Assertion assertion `xml:"Assertion"`
-			} `xml:"RequestedSecurityToken"`
+			Response struct {
+				RequestedSecurityToken struct {
+					Assertion assertion `xml:"Assertion"`
+				} `xml:"RequestedSecurityToken"`
+			} `xml:"RequestSecurityTokenResponse"`
 		} `xml:"RequestSecurityTokenResponseCollection"`
 	}
 	var env2 struct {
 		Body rstc `xml:"Body"`
 	}
 	if err := xml.Unmarshal(xmlData, &env2); err == nil {
-		token = env2.Body.RSTC.RequestedSecurityToken.Assertion.DesktopSsoToken
+		token = env2.Body.RSTC.Response.RequestedSecurityToken.Assertion.DesktopSsoToken
 		if token != "" {
 			return token, nil
 		}
@@ -313,8 +326,11 @@ func discoverTenantID(domain string) (string, error) {
 		return "", err
 	}
 
-	// Extract tenant ID from authorization_endpoint:
-	// "authorization_endpoint": "https://login.microsoftonline.com/{tenant-id}/oauth2/authorize"
+	return parseDiscoveryResponse(body)
+}
+
+// parseDiscoveryResponse extracts the tenant ID from an OIDC discovery JSON body.
+func parseDiscoveryResponse(body []byte) (string, error) {
 	var config struct {
 		AuthEndpoint string `json:"authorization_endpoint"`
 	}
@@ -335,12 +351,18 @@ func xmlEscape(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch r {
-		case '&': b.WriteString("&amp;")
-		case '<': b.WriteString("&lt;")
-		case '>': b.WriteString("&gt;")
-		case '"': b.WriteString("&quot;")
-		case '\'': b.WriteString("&apos;")
-		default: b.WriteRune(r)
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&apos;")
+		default:
+			b.WriteRune(r)
 		}
 	}
 	return b.String()
@@ -348,7 +370,9 @@ func xmlEscape(s string) string {
 
 func uuid() string {
 	b := make([]byte, 16)
-	cryptorand.Read(b)
+	if _, err := io.ReadFull(cryptorand.Reader, b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",

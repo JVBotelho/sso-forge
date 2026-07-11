@@ -88,9 +88,9 @@ func TestServerChecksum(t *testing.T) {
 	}
 
 	// Verify it matches independent computation (MD5 prefix + HMAC-MD5)
-	ksign := hmacMD5(ntHash, []byte(signatureKeyBytes))
+	ksign := HmacMD5(ntHash, []byte(signatureKeyBytes))
 	tmp := md5Hash(append([]byte{0x11, 0x00, 0x00, 0x00}, pacData...))
-	expected := hmacMD5(ksign, tmp)
+	expected := HmacMD5(ksign, tmp)
 
 	if !hmac.Equal(cs, expected) {
 		t.Errorf("checksum mismatch")

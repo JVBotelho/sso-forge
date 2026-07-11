@@ -2,18 +2,18 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
-	cryptorand "crypto/rand"
 	"strings"
 	"time"
 
-	"github.com/JVBotelho/sso-forge/discovery"
 	"github.com/JVBotelho/sso-forge/exchange"
 	"github.com/JVBotelho/sso-forge/pac"
 	"github.com/JVBotelho/sso-forge/parse"
@@ -70,15 +70,10 @@ func main() {
 
 	// Pre-generated ticket path: skip forge, test exchange only
 	if *ticket != "" {
-		info, err := discovery.ResolveOrDiscover(*domain, *tenantID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: discovery: %v\n", err)
-			os.Exit(1)
-		}
 		token, err := exchange.GetAccessToken(&exchange.ExchangeParams{
 			SPNEGOTicket: *ticket,
 			Domain:       *domain,
-			TenantID:     info.TenantID,
+			TenantID:     *tenantID,
 			Resource:     *resource,
 			ClientID:     *clientID,
 		})
@@ -91,10 +86,10 @@ func main() {
 			fmt.Println(token.AccessToken)
 		case "json":
 			out, err := json.MarshalIndent(token, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: json: %v\n", err)
-			os.Exit(1)
-		}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: json: %v\n", err)
+				os.Exit(1)
+			}
 			fmt.Println(string(out))
 		}
 		return
@@ -131,12 +126,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 2. Resolve tenant
-	info, err := discovery.ResolveOrDiscover(*domain, *tenantID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: discovery: %v\n", err)
-		os.Exit(1)
-	}
+	// 2. Resolve tenant (auto-discovered in exchange if empty)
 	if *verbose {
 		fmt.Fprintf(os.Stderr, "[+] Domain: %s | Realm: %s\n", *domain, *realm)
 	}
@@ -245,8 +235,8 @@ func main() {
 				"status":   "dry-run",
 				"spnego64": spnegoB64,
 				"domain":   *domain,
-				"realm":    info.Realm,
-				"tenant":   info.TenantID,
+				"realm":    *realm,
+				"tenant":   *tenantID,
 				"upn":      *upn,
 				"sid":      *sid,
 			}, "", "  ")
@@ -265,7 +255,7 @@ func main() {
 	token, err := exchange.GetAccessToken(&exchange.ExchangeParams{
 		SPNEGOTicket: spnegoB64,
 		Domain:       *domain,
-		TenantID:     info.TenantID,
+		TenantID:     *tenantID,
 		Resource:     *resource,
 		ClientID:     *clientID,
 	})
@@ -276,7 +266,9 @@ func main() {
 
 	// 7. Output
 	// Zero key material
-	for i := range key { key[i] = 0 }
+	for i := range key {
+		key[i] = 0
+	}
 	runtime.GC()
 	switch *output {
 	case "token":
@@ -304,18 +296,24 @@ func main() {
 }
 
 func serverNameOrDefault(explicit, netBIOS string) string {
-	if explicit != "" { return explicit }
+	if explicit != "" {
+		return explicit
+	}
 	return netBIOS
 }
 
 func displayNameOrDefault(explicit, userName string) string {
-	if explicit != "" { return explicit }
+	if explicit != "" {
+		return explicit
+	}
 	return userName
 }
 
 func randomizedAuthTimeFT(now time.Time) uint64 {
 	b := make([]byte, 1)
-	cryptorand.Read(b)
+	if _, err := io.ReadFull(cryptorand.Reader, b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
 	jitter := 30 + int(b[0])%60
 	authTime := now.Add(-time.Duration(jitter) * time.Second)
 	return uint64(authTime.UnixNano()/100 + 116444736000000000)
@@ -327,7 +325,9 @@ func parseRIDs(s string) []uint32 {
 	for _, p := range parts {
 		var rid int64
 		fmt.Sscanf(strings.TrimSpace(p), "%d", &rid)
-		if rid > 0 { rids = append(rids, uint32(rid)) }
+		if rid > 0 {
+			rids = append(rids, uint32(rid))
+		}
 	}
 	return rids
 }

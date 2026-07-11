@@ -143,9 +143,9 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 
 	// NDR common header (20 bytes)
 	body.Write([]byte{0x01, 0x10, 0x08, 0x00, 0xcc, 0xcc, 0xcc, 0xcc}) // version, endian, common header len, filler
-	putU32(&body, 0) // info buffer length placeholder (filled later)
-	putU32(&body, 0) // zeros
-	putU32(&body, 0x00020000) // user info pointer
+	putU32(&body, 0)                                                   // info buffer length placeholder (filled later)
+	putU32(&body, 0)                                                   // zeros
+	putU32(&body, 0x00020000)                                          // user info pointer
 
 	// FileTimes (6 × 8 = 48 bytes)
 	putFileTime(&body, logonTime)
@@ -156,29 +156,31 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 	putFileTime(&body, pwdMustChange)
 
 	// RPC_UNICODE_STRINGs (6): UserName, DisplayName, LogonScript, ProfilePath, HomeDirectory, HomeDrive
-	putRPCUnicodeString(&body, len(bUserName), len(bUserName), 0x00020004)    // UserName
+	putRPCUnicodeString(&body, len(bUserName), len(bUserName), 0x00020004)       // UserName
 	putRPCUnicodeString(&body, len(bDisplayName), len(bDisplayName), 0x00020008) // DisplayName
-	putRPCUnicodeString(&body, 0, 0, 0x0002000c) // LogonScript
-	putRPCUnicodeString(&body, 0, 0, 0x00020010) // ProfilePath
-	putRPCUnicodeString(&body, 0, 0, 0x00020014) // HomeDirectory
-	putRPCUnicodeString(&body, 0, 0, 0x00020018) // HomeDrive
+	putRPCUnicodeString(&body, 0, 0, 0x0002000c)                                 // LogonScript
+	putRPCUnicodeString(&body, 0, 0, 0x00020010)                                 // ProfilePath
+	putRPCUnicodeString(&body, 0, 0, 0x00020014)                                 // HomeDirectory
+	putRPCUnicodeString(&body, 0, 0, 0x00020018)                                 // HomeDrive
 
 	// uint16: LogonCount, BadPasswordCount (4 bytes)
 	putU16(&body, uint16(10+randInt(490)))
 	putU16(&body, 0)
 
 	// uint32: UserID (RID), PrimaryGroupID (8 bytes)
-	body.Write(userSID)             // UserRID (4 bytes, little-endian from SID tail)
-	putU32(&body, primaryGroupRID)  // 513 = Domain Users
+	body.Write(userSID)            // UserRID (4 bytes, little-endian from SID tail)
+	putU32(&body, primaryGroupRID) // 513 = Domain Users
 
 	// GroupCount + GroupPointer (8 bytes)
 	gr := p.GroupRIDs
-	if len(gr) == 0 { gr = []uint32{513, 515} }
+	if len(gr) == 0 {
+		gr = []uint32{513, 515}
+	}
 	putU32(&body, uint32(len(gr)))
-	putU32(&body, 0x0002001c)        // pointer to GroupIDs
+	putU32(&body, 0x0002001c) // pointer to GroupIDs
 
 	// UserFlags (4 bytes)
-	putU32(&body, userFlagNormal)    // 0x20
+	putU32(&body, userFlagNormal) // 0x20
 
 	// UserSessionKey (16 bytes, all zeros — only used for NTLM)
 	body.Write(make([]byte, 16))
@@ -208,8 +210,8 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 
 	if b.params.extraSID {
 		// ExtraSIDs
-		putU32(&body, 1)             // ExtraSIDCount
-		putU32(&body, 0x0002002c)    // ExtraSIDPointer
+		putU32(&body, 1)          // ExtraSIDCount
+		putU32(&body, 0x0002002c) // ExtraSIDPointer
 	} else {
 		putU32(&body, 0)
 		putU32(&body, 0)
@@ -270,7 +272,8 @@ func (b *Builder) encodeKerbValidationInfo() ([]byte, error) {
 		putU32(&refs, 1)
 		refs.Write([]byte{0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00})
 	} else {
-		putU32(&refs, 0); putU32(&refs, 0)
+		putU32(&refs, 0)
+		putU32(&refs, 0)
 	} // S-1-18-1
 
 	// Assemble: body + deferred refs
@@ -374,10 +377,10 @@ func (b *Builder) assemble(buffers []struct {
 // ---------- Checksum ----------
 
 func ServerChecksum(pacData []byte, ntHash []byte) []byte {
-	ksign := hmacMD5(ntHash, []byte(signatureKeyBytes))
+	ksign := HmacMD5(ntHash, []byte(signatureKeyBytes))
 	prefix := []byte{0x11, 0x00, 0x00, 0x00}
 	tmp := md5Hash(append(prefix, pacData...))
-	return hmacMD5(ksign, tmp)
+	return HmacMD5(ksign, tmp)
 }
 
 func md5Hash(data []byte) []byte {
@@ -386,7 +389,7 @@ func md5Hash(data []byte) []byte {
 	return h.Sum(nil)
 }
 
-func hmacMD5(key, data []byte) []byte {
+func HmacMD5(key, data []byte) []byte {
 	mac := hmac.New(md5.New, key)
 	mac.Write(data)
 	return mac.Sum(nil)
@@ -407,17 +410,17 @@ func putRPCUnicodeString(w *bytes.Buffer, length, maxLength int, pointer uint32)
 
 func putNDRString(w *bytes.Buffer, utf16Data []byte) {
 	numChars := uint32(len(utf16Data) / 2)
-	putU32(w, numChars)          // MaximumCount
-	putU32(w, 0)                 // Offset
-	putU32(w, numChars)          // ActualCount
+	putU32(w, numChars) // MaximumCount
+	putU32(w, 0)        // Offset
+	putU32(w, numChars) // ActualCount
 	w.Write(utf16Data)
 }
 
 func putNDRStringWithTotal(w *bytes.Buffer, utf16Data []byte, totalChars int) {
 	actualChars := uint32(len(utf16Data) / 2)
 	putU32(w, uint32(totalChars)) // MaximumCount (includes null terminator)
-	putU32(w, 0)                   // Offset
-	putU32(w, actualChars)         // ActualCount (without null terminator)
+	putU32(w, 0)                  // Offset
+	putU32(w, actualChars)        // ActualCount (without null terminator)
 	w.Write(utf16Data)
 }
 
@@ -545,8 +548,10 @@ func parseSIDComponent(s string, start int) (uint64, int, error) {
 	var v uint64
 	for i := start; i < end; i++ {
 		digit := uint64(s[i] - '0')
-		if digit > 9 { continue }
-		if v > (maxComponent - digit) / 10 {
+		if digit > 9 {
+			continue
+		}
+		if v > (maxComponent-digit)/10 {
 			return 0, start, fmt.Errorf("pac: SID component overflow at %d", i)
 		}
 		v = v*10 + digit

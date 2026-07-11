@@ -19,6 +19,14 @@ This tool forges Kerberos tickets for Entra ID Seamless SSO using the
 AZUREADSSOACC key. It is a post-exploitation tool — the operator must
 already have Domain Admin or equivalent privileges to extract the key.
 
+## Authorized Use Only
+
+This tool is intended for authorized security testing, red team
+engagements, and research. Do not use it against systems or accounts
+without explicit, documented permission from their owner. Misuse for
+unauthorized access is outside the scope of what this project supports
+and may be illegal under applicable computer-crime law.
+
 ## Dependencies
 
 Dependencies are pinned via go.sum. Dependabot monitors for updates.

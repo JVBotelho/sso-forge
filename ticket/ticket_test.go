@@ -6,12 +6,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/JVBotelho/sso-forge/pac"
 )
 
 func TestDerLen(t *testing.T) {
 	tests := []struct {
-		n    int
-		hex  string
+		n   int
+		hex string
 	}{
 		{0, "00"},
 		{1, "01"},
@@ -141,14 +143,14 @@ func TestDerSeq(t *testing.T) {
 }
 
 func TestHmacMD5(t *testing.T) {
-	key := []byte{0x61, 0x62, 0x63} // "abc"
+	key := []byte{0x61, 0x62, 0x63}  // "abc"
 	data := []byte{0x64, 0x65, 0x66} // "def"
-	got := hmacMD5(key, data)
+	got := pac.HmacMD5(key, data)
 	if len(got) != 16 {
 		t.Errorf("hmacMD5 len = %d, want 16", len(got))
 	}
 	// Verify deterministic
-	got2 := hmacMD5(key, data)
+	got2 := pac.HmacMD5(key, data)
 	if hex.EncodeToString(got) != hex.EncodeToString(got2) {
 		t.Errorf("hmacMD5 not deterministic")
 	}
@@ -178,8 +180,8 @@ func TestEncryptRC4_Roundtrip(t *testing.T) {
 	// Manual decrypt to verify
 	cs := ct[:16]
 	ciphertext := ct[16:]
-	k2 := hmacMD5(key, []byte{byte(usage), 0, 0, 0})
-	k3 := hmacMD5(k2, cs)
+	k2 := pac.HmacMD5(key, []byte{byte(usage), 0, 0, 0})
+	k3 := pac.HmacMD5(k2, cs)
 	pt := rc4Crypt(k3, ciphertext)
 	conf := pt[:8]
 	plain := pt[8:]
@@ -202,7 +204,9 @@ func TestGssChecksumData(t *testing.T) {
 
 func TestTokenRestrictionData(t *testing.T) {
 	mid := make([]byte, 32)
-	for i := range mid { mid[i] = byte(i) }
+	for i := range mid {
+		mid[i] = byte(i)
+	}
 	got := tokenRestrictionData(mid)
 	if len(got) != 40 {
 		t.Errorf("tokenRestrictionData len = %d, want 40", len(got))

