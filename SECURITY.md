@@ -3,9 +3,14 @@
 ## Reporting a Vulnerability
 
 This is a security research tool. For vulnerabilities in the tool itself,
-open an issue or submit a pull request.
+report privately via [GitHub Security Advisories](https://github.com/JVBotelho/sso-forge/security/advisories/new)
+rather than a public issue.
 
-For vulnerabilities in the techniques it uses (Seamless SSO), see:
+For vulnerabilities in the underlying technique (Seamless SSO / Kerberos
+key derivation itself, as opposed to this tool), report to
+[MSRC](https://msrc.microsoft.com/report/vulnerability/) — this project
+implements a known, published technique and does not introduce a new
+vulnerability in Entra ID.
 
 ## Supported Versions
 
